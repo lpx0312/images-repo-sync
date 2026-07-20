@@ -1,0 +1,19 @@
+# 构建依赖
+web/node_modules
+web/dist
+data
+*.db
+*.db-journal
+
+# 本地二进制
+/server
+/irs-server
+/tmp
+
+# 编辑器/系统
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+*.log

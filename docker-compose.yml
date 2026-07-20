@@ -1,0 +1,24 @@
+services:
+  images-repo-sync:
+    build: .
+    image: images-repo-sync:latest
+    container_name: images-repo-sync
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # 安全配置:生产环境务必在 .env 中设置强随机值。
+      JWT_SECRET: "${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}"
+      ENCRYPT_KEY: "${ENCRYPT_KEY:?请在 .env 中设置 ENCRYPT_KEY}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      # 首次启动后请立即登录修改默认密码。
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-Admin@ChangeMe}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

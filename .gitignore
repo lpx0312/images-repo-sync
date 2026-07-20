@@ -1,0 +1,29 @@
+# Go
+/server
+/irs-server
+*.exe
+*.test
+*.out
+
+# 数据
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 前端
+web/node_modules/
+web/dist/
+
+# 编辑器/系统
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# 本地环境配置(只保留 .env.example 模板)
+.env
+
+# ZCode 工具内部文件
+.zcode/
