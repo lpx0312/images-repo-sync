@@ -77,6 +77,7 @@ type SyncTask struct {
 	TargetRegistryID uint       `json:"target_registry_id" gorm:"not null;index"`
 	Mode             string     `json:"mode" gorm:"type:varchar(20);not null"`
 	TargetProject    string     `json:"target_project" gorm:"type:varchar(255)"`
+	Arch             string     `json:"arch" gorm:"type:varchar(10);default:'amd64'"` // amd64 / arm64 / all
 	Total            int        `json:"total" gorm:"default:0"`
 	Succeeded        int        `json:"succeeded" gorm:"default:0"`
 	Failed           int        `json:"failed" gorm:"default:0"`

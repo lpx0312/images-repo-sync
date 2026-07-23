@@ -13,9 +13,10 @@ type syncTaskItemWithRefs struct {
 	TargetRef string `gorm:"column:target_ref"`
 }
 
-// taskLoader 仅用于占位,标记任务存在。
+// taskLoader 用于加载任务执行所需字段。
 type taskLoader struct {
-	ID uint `gorm:"column:id"`
+	ID   uint   `gorm:"column:id"`
+	Arch string `gorm:"column:arch"`
 }
 
 // registryCreds 是任务执行时需要的仓库凭证(已解密)。

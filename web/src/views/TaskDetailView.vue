@@ -6,6 +6,8 @@
           <el-button :icon="Back" link @click="$router.push('/tasks')">返回</el-button>
           <h3 class="section-title">任务 #{{ taskId }}</h3>
           <el-tag :type="statusType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+          <el-tag type="info">{{ archLabel(task.arch) }}</el-tag>
+          <el-tag size="small">{{ modeLabel(task.mode) }}</el-tag>
         </div>
         <div class="section-actions">
           <el-button v-if="canCancel" type="danger" plain @click="onCancel">取消任务</el-button>
@@ -93,7 +95,7 @@ const taskId = Number(route.params.id)
 
 const task = reactive({
   id: taskId, status: 'pending', total: 0, succeeded: 0, failed: 0, skipped: 0,
-  mode: '', target_project: '', started_at: null, finished_at: null,
+  mode: '', arch: '', target_project: '', started_at: null, finished_at: null,
 })
 const items = ref([])
 const logs = ref([])
@@ -119,7 +121,7 @@ async function reload() {
   const body = res.data ?? res
   Object.assign(task, {
     status: body.status, total: body.total, succeeded: body.succeeded, failed: body.failed, skipped: body.skipped,
-    mode: body.mode, target_project: body.target_project,
+    mode: body.mode, arch: body.arch, target_project: body.target_project,
     started_at: body.started_at, finished_at: body.finished_at,
   })
   items.value = body.items || []
@@ -192,7 +194,7 @@ function applyEvent(eventName, payload) {
         const d = payload.data
         Object.assign(task, {
           status: d.status, total: d.total, succeeded: d.succeeded, failed: d.failed, skipped: d.skipped,
-          mode: d.mode, target_project: d.target_project,
+          mode: d.mode, arch: d.arch, target_project: d.target_project,
         })
         items.value = d.items || items.value
       }
@@ -276,6 +278,12 @@ function statusType(s) {
 }
 function statusLabel(s) {
   return { pending: '待执行', running: '进行中', success: '成功', failed: '失败', canceled: '已取消' }[s] || s
+}
+function archLabel(a) {
+  return { amd64: '仅 AMD64', arm64: '仅 ARM64', all: '所有架构' }[a] || a || '仅 AMD64'
+}
+function modeLabel(m) {
+  return { flat: '① 扁平', preserve_path: '② 保持路径', replace_host: '③ 换地址' }[m] || m
 }
 function itemStatusType(s) {
   return { pending: 'info', running: 'warning', success: 'success', failed: 'danger', skipped: 'info' }[s] || ''

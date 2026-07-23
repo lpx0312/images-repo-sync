@@ -35,11 +35,13 @@ func (m *Manager) runTask(taskID uint) error {
 
 	// 1. 加载任务及明细,标记 running。
 	var items []syncTaskItemWithRefs
+	var arch string // 从任务读取的目标架构,稍后传给 skopeo.Copy
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		var t taskLoader
 		if err := tx.Table("sync_tasks").Where("id = ?", taskID).First(&t).Error; err != nil {
 			return err
 		}
+		arch = t.Arch
 		if err := tx.Table("sync_task_items").
 			Select("id, source_ref, target_ref").
 			Where("task_id = ?", taskID).Order("id ASC").
@@ -105,6 +107,7 @@ func (m *Manager) runTask(taskID uint) error {
 			DstAuthFile:     dstAuth,
 			DstInsecure:     dstCreds.Insecure,
 			PreserveDigests: true,
+			Arch:            arch,
 		}, func(line string) {
 			m.emit(taskID, EventItemProgress, Event{
 				ItemID: it.ID, Message: line,

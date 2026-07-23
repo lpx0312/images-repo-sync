@@ -55,6 +55,11 @@
             <el-tag size="small">{{ modeLabel(row.mode) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="架构" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ archLabel(row.arch) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
@@ -159,6 +164,9 @@ function progressStatus(s) {
 }
 function modeLabel(m) {
   return { flat: '① 扁平', preserve_path: '② 保持路径', replace_host: '③ 换地址' }[m] || m
+}
+function archLabel(a) {
+  return { amd64: 'amd64', arm64: 'arm64', all: '所有架构' }[a] || a || 'amd64'
 }
 function statusType(s) {
   return { pending: 'info', running: 'warning', success: 'success', failed: 'danger', canceled: 'info' }[s] || ''

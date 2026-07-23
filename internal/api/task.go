@@ -29,6 +29,7 @@ type createTaskRequest struct {
 	TargetRegistryID uint     `json:"target_registry_id" binding:"required"`
 	Mode             string   `json:"mode" binding:"required"`
 	TargetProject    string   `json:"target_project"`
+	Arch             string   `json:"arch"` // amd64 / arm64 / all;空按 amd64
 	Refs             []string `json:"refs" binding:"required"`
 	PreserveDigests  bool     `json:"preserve_digests"`
 }
@@ -59,6 +60,18 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 	if req.SourceRegistryID == req.TargetRegistryID {
 		badReq(c, "源和目标仓库不能相同")
+		return
+	}
+
+	// 校验架构取值,空值默认 amd64。
+	arch := req.Arch
+	if arch == "" {
+		arch = skopeo.ArchAMD64
+	}
+	switch arch {
+	case skopeo.ArchAMD64, skopeo.ArchARM64, skopeo.ArchAll:
+	default:
+		badReq(c, "架构参数无效,可选: amd64 / arm64 / all")
 		return
 	}
 
@@ -100,6 +113,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		TargetRegistryID: req.TargetRegistryID,
 		Mode:             req.Mode,
 		TargetProject:    project,
+		Arch:             arch,
 		Status:           model.TaskStatusPending,
 		Total:            len(items),
 		CreatedBy:        middleware.UserID(c),
@@ -298,6 +312,7 @@ func (h *TaskHandler) buildTaskVO(t *model.SyncTask, withItems bool) gin.H {
 		"target_registry_id": t.TargetRegistryID,
 		"mode":              t.Mode,
 		"target_project":    t.TargetProject,
+		"arch":              t.Arch,
 		"total":             t.Total,
 		"succeeded":         t.Succeeded,
 		"failed":            t.Failed,

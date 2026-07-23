@@ -119,6 +119,17 @@
             </div>
           </el-form-item>
 
+          <el-form-item label="目标架构" required>
+            <el-radio-group v-model="form.arch">
+              <el-radio-button value="amd64">仅 AMD64</el-radio-button>
+              <el-radio-button value="arm64">仅 ARM64</el-radio-button>
+              <el-radio-button value="all">所有架构</el-radio-button>
+            </el-radio-group>
+            <div class="form-tip">
+              仅同步所选架构的镜像。「所有架构」会完整复制多架构 manifest list;单架构模式下目标仓库得到的是单架构镜像。
+            </div>
+          </el-form-item>
+
           <el-form-item label="同步模式" required>
             <ModePreview
               v-model="form.mode"
@@ -141,8 +152,9 @@
           <el-descriptions-item label="源仓库">{{ sourceRegistry?.name }}</el-descriptions-item>
           <el-descriptions-item label="目标仓库">{{ targetRegistry?.name }}</el-descriptions-item>
           <el-descriptions-item label="模式">{{ modeLabel(form.mode) }}</el-descriptions-item>
+          <el-descriptions-item label="目标架构">{{ archLabel(form.arch) }}</el-descriptions-item>
           <el-descriptions-item label="目标 project">{{ form.mode === 'replace_host' ? '—' : (effectiveProject || '未设置') }}</el-descriptions-item>
-          <el-descriptions-item label="镜像数量" :span="2">{{ refsForNext.length }}</el-descriptions-item>
+          <el-descriptions-item label="镜像数量">{{ refsForNext.length }}</el-descriptions-item>
         </el-descriptions>
 
         <div class="mapping-card">
@@ -195,6 +207,7 @@ const form = reactive({
   targetRegistryId: null,
   mode: 'flat',
   targetProject: '',
+  arch: 'amd64',
 })
 
 const rawList = ref('')
@@ -250,6 +263,10 @@ function modeLabel(m) {
   return { flat: '① 单一项目(扁平)', preserve_path: '② 保持源项目路径', replace_host: '③ 仅替换仓库地址' }[m]
 }
 
+function archLabel(a) {
+  return { amd64: '仅 AMD64', arm64: '仅 ARM64', all: '所有架构' }[a] || a
+}
+
 function onSourceChange() {
   pickedRefs.value = []
 }
@@ -291,6 +308,7 @@ async function onSubmit() {
       target_registry_id: form.targetRegistryId,
       mode: form.mode,
       target_project: form.targetProject,
+      arch: form.arch,
       refs: refsForNext.value,
     })
     const body = res.data ?? res

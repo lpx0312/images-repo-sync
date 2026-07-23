@@ -5,6 +5,13 @@ import (
 	"fmt"
 )
 
+// 架构选择常量。
+const (
+	ArchAMD64 = "amd64" // 仅 x86-64
+	ArchARM64 = "arm64" // 仅 ARM 64(如树莓派4/鲲鹏/Graviton)
+	ArchAll   = "all"   // 所有架构(完整 manifest list)
+)
+
 // CopyOptions 描述一次 skopeo copy 调用的全部参数。
 type CopyOptions struct {
 	SrcRef          string // 完整源引用,如 gcr.io/foo/bar:v1(不含 docker://)
@@ -15,7 +22,8 @@ type CopyOptions struct {
 	DstAuthFile     string // 目标 auth.json 路径(可空)
 	DstInsecure     bool   // 目标跳过 TLS 校验
 
-	PreserveDigests bool // 是否保留 digest(--preserve-digests)
+	PreserveDigests bool   // 是否保留 digest(--preserve-digests)
+	Arch            string // 目标架构: amd64 / arm64 / all;空按 amd64 处理
 }
 
 // CopyResult 描述一次 copy 的结果。StderrTail 仅在失败时填充,便于排查。
@@ -24,34 +32,54 @@ type CopyResult struct {
 	StderrTail string
 }
 
-// Copy 执行 skopeo copy --all,把多架构镜像从源复制到目标,实时回调输出行。
+// Copy 执行 skopeo copy,把镜像从源复制到目标,实时回调输出行。
 //
-// 命令形如:
+// 架构选择(Arch 字段)对应两种互斥的 skopeo 调用方式:
+//   - ArchAll          → skopeo copy --all ...            (复制完整 manifest list)
+//   - ArchAMD64/ARM64  → skopeo --override-arch=<arch> --override-os=linux copy ...
+//                        (仅复制指定架构,目标成为单架构镜像)
 //
-//	skopeo copy --all [--preserve-digests] \
-//	  --src-authfile=sa.json --dest-authfile=da.json \
-//	  [--src-tls-verify=false] [--dest-tls-verify=false] \
-//	  docker://<src> docker://<dst>
-//
-// --all 保证 manifest list 的所有架构都被复制;源是单架构镜像时自动退化。
+// 注意:--override-arch 是 skopeo 的全局 flag,必须放在 copy 子命令之前;
+// 它与 --all 互斥,不能同时使用。
 func Copy(ctx context.Context, opt CopyOptions, handler LineHandler) CopyResult {
-	args := []string{"copy", "--all"}
+	// globalArgs 放 skopeo 的全局 flag(如 --override-arch),copyArgs 放 copy 子命令参数。
+	// 注意 flag 顺序:全局 flag 在 "copy" 之前,copy 的 flag(--all/--preserve-digests 等)在 "copy" 之后。
+	var globalArgs, copyArgs []string
+	copyArgs = append(copyArgs, "copy") // 子命令必须先入队
+
+	switch opt.Arch {
+	case ArchAll:
+		// 复制完整 manifest list 的所有架构。--all 是 copy 的 flag,在 "copy" 之后。
+		copyArgs = append(copyArgs, "--all")
+	case ArchARM64:
+		// 仅复制 arm64 单架构。--override-arch 是全局 flag,在 "copy" 之前。
+		globalArgs = append(globalArgs, "--override-arch="+ArchARM64, "--override-os=linux")
+	case ArchAMD64, "":
+		// 仅复制 amd64 单架构(默认)。
+		globalArgs = append(globalArgs, "--override-arch="+ArchAMD64, "--override-os=linux")
+	default:
+		// 兜底:按 amd64 处理,避免拼出非法命令。
+		globalArgs = append(globalArgs, "--override-arch="+ArchAMD64, "--override-os=linux")
+	}
+
 	if opt.PreserveDigests {
-		args = append(args, "--preserve-digests")
+		copyArgs = append(copyArgs, "--preserve-digests")
 	}
 	if opt.SrcAuthFile != "" {
-		args = append(args, "--src-authfile="+opt.SrcAuthFile)
+		copyArgs = append(copyArgs, "--src-authfile="+opt.SrcAuthFile)
 	}
 	if opt.DstAuthFile != "" {
-		args = append(args, "--dest-authfile="+opt.DstAuthFile)
+		copyArgs = append(copyArgs, "--dest-authfile="+opt.DstAuthFile)
 	}
 	if opt.SrcInsecure {
-		args = append(args, "--src-tls-verify=false")
+		copyArgs = append(copyArgs, "--src-tls-verify=false")
 	}
 	if opt.DstInsecure {
-		args = append(args, "--dest-tls-verify=false")
+		copyArgs = append(copyArgs, "--dest-tls-verify=false")
 	}
-	args = append(args, "docker://"+opt.SrcRef, "docker://"+opt.DstRef)
+	copyArgs = append(copyArgs, "docker://"+opt.SrcRef, "docker://"+opt.DstRef)
+
+	args := append(globalArgs, copyArgs...)
 
 	// 保留 stderr 末尾若干行用于错误定位。
 	const tailLines = 6
