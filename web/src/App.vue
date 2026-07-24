@@ -137,6 +137,7 @@ const showLayout = computed(() => route.name !== 'Login' && authStore.isLoggedIn
 const navItems = [
   { path: '/tasks', label: '同步任务', icon: Box },
   { path: '/registries', label: '仓库管理', icon: Files },
+  { path: '/settings', label: '系统设置', icon: Setting },
 ]
 
 function goNew() {

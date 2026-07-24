@@ -46,14 +46,33 @@ func Init() error {
 		&model.SyncTask{},
 		&model.SyncTaskItem{},
 		&model.LoginLog{},
+		&model.SystemSetting{},
 	); err != nil {
 		return fmt.Errorf("自动迁移失败: %w", err)
 	}
 
 	DB = db
 
+	if err := seedDefaultSettings(db); err != nil {
+		return fmt.Errorf("初始化系统设置失败: %w", err)
+	}
 	if err := seedDefaultAdmin(db); err != nil {
 		return fmt.Errorf("初始化默认管理员失败: %w", err)
+	}
+	return nil
+}
+
+// seedDefaultSettings 给系统配置表写入默认值(仅当键不存在时)。
+func seedDefaultSettings(db *gorm.DB) error {
+	defaults := map[string]string{
+		model.SettingKeyDefaultArch: "amd64", // 默认同步架构
+	}
+	for k, v := range defaults {
+		var count int64
+		db.Model(&model.SystemSetting{}).Where("`key` = ?", k).Count(&count)
+		if count == 0 {
+			db.Create(&model.SystemSetting{Key: k, Value: v})
+		}
 	}
 	return nil
 }

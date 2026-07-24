@@ -29,6 +29,11 @@ const routes = [
     component: () => import('@/views/RegistryView.vue'),
   },
   {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('@/views/SettingsView.vue'),
+  },
+  {
     path: '/',
     redirect: '/tasks',
   },

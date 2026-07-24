@@ -122,3 +122,17 @@ type LoginLog struct {
 }
 
 func (LoginLog) TableName() string { return "login_logs" }
+
+// SystemSetting 是键值对形式的系统配置。
+// key 形如 "default_arch";value 为字符串,由调用方解释。
+type SystemSetting struct {
+	Key   string `json:"key" gorm:"primaryKey;type:varchar(64)"`
+	Value string `json:"value" gorm:"type:varchar(255)"`
+}
+
+func (SystemSetting) TableName() string { return "system_settings" }
+
+// 已知的系统配置键。
+const (
+	SettingKeyDefaultArch = "default_arch" // 默认同步架构: amd64 / arm64 / all
+)

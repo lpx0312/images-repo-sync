@@ -27,3 +27,8 @@ export const taskAPI = {
   get: (id) => client.get(`/tasks/${id}`),
   cancel: (id) => client.post(`/tasks/${id}/cancel`),
 }
+
+export const settingsAPI = {
+  get: () => client.get('/settings'),
+  update: (payload) => client.put('/settings', payload),
+}

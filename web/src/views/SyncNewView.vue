@@ -188,7 +188,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Back } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { registryAPI, taskAPI, catalogAPI } from '@/api'
+import { registryAPI, taskAPI, catalogAPI, settingsAPI } from '@/api'
 import ModePreview from '@/components/ModePreview.vue'
 import CatalogBrowser from '@/components/CatalogBrowser.vue'
 
@@ -324,6 +324,14 @@ onMounted(async () => {
   // 仓库不分角色,源/目标共用同一列表。
   const res = await registryAPI.list()
   allRegistries.value = res.data ?? res
+  // 读取系统设置的默认架构,作为架构单选的初值。
+  try {
+    const sr = await settingsAPI.get()
+    const sd = sr.data ?? sr
+    form.arch = sd.default_arch || 'amd64'
+  } catch {
+    /* 读取失败用代码默认值 amd64 */
+  }
 })
 
 // ===== 前端复刻后端解析(与 ModePreview 一致) =====

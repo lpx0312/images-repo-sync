@@ -38,6 +38,7 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 		NewRegistryHandler(db).RegisterRoutes(api)
 		NewCatalogHandler(db).RegisterRoutes(api)
 		NewTaskHandler(db).RegisterRoutes(api)
+		NewSettingsHandler(db).RegisterRoutes(api)
 	}
 
 	if staticFS != nil {
