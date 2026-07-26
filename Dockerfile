@@ -6,8 +6,9 @@
 # --platform=$BUILDPLATFORM 让此阶段始终在 amd64 上执行,加快构建。
 FROM --platform=$BUILDPLATFORM registry.cn-hangzhou.aliyuncs.com/lpx03/node:20.11.1-bookworm AS web
 WORKDIR /web
-# 使用内网 npm 镜像加速依赖安装。
-RUN npm config set registry http://192.168.0.12/repository/npm-group/
+# npm registry: 内网默认, CI 中可通过 --build-arg 传入公共 CN 代理。
+ARG NPM_REGISTRY=http://192.168.0.12/repository/npm-group/
+RUN npm config set registry ${NPM_REGISTRY}
 # 先拷依赖描述,利用 docker 层缓存。
 COPY web/package*.json ./
 RUN npm ci --no-audit --no-fund
@@ -23,9 +24,11 @@ FROM --platform=$BUILDPLATFORM registry.cn-hangzhou.aliyuncs.com/lpx03/golang:1.
 # TARGETARCH 由 buildx 自动注入(build 时为 amd64 / arm64)。
 ARG TARGETARCH
 WORKDIR /src
-# 内网 Go 代理,避免容器内访问 proxy.golang.org 超时。
-ENV GOPROXY=http://192.168.0.12/repository/go-group/ \
-    GOSUMDB=off
+# Go proxy: 内网默认, CI 中通过 --build-arg 传入公共 CN 代理。
+ARG GOPROXY=http://192.168.0.12/repository/go-group/
+ARG GOSUMDB=off
+ENV GOPROXY=${GOPROXY} \
+    GOSUMDB=${GOSUMDB}
 # 先拷依赖描述(go mod 只与模块图有关,与目标架构无关,只跑一次)。
 COPY go.mod go.sum ./
 RUN go mod download
