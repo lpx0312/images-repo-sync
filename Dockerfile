@@ -11,7 +11,10 @@ ARG NPM_REGISTRY=http://192.168.0.12/repository/npm-group/
 RUN npm config set registry ${NPM_REGISTRY}
 # 先拷依赖描述,利用 docker 层缓存。
 COPY web/package*.json ./
-RUN npm ci --no-audit --no-fund
+# npm install (而非 npm ci): lockfile 中每个包的 resolved URL 会固定指向
+# npm config 当时的 registry。CI 切换 registry 后 npm ci 不会重解析 URL,
+# 仍会尝试连接内网地址导致超时。npm install 则会根据当前 registry 重新下载。
+RUN npm install --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 # 产物在 /web/dist
