@@ -74,7 +74,7 @@ jobs:
 
       # -------------------------------------------------------------------
       # 6. 多架构构建并推送
-      #    使用公共 CN 代理代替内网代理
+      #    GitHub Actions runner 在海外,使用默认国际镜像源而非 CN 代理
       # -------------------------------------------------------------------
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -85,9 +85,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            NPM_REGISTRY=https://registry.npmmirror.com
-            GOPROXY=https://goproxy.cn,direct
-            GOSUMDB=sum.golang.google.cn
-          # 缓存: 使用 GitHub Actions Cache 加速后续构建
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            NPM_REGISTRY=https://registry.npmjs.org
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org
