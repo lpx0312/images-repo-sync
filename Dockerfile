@@ -6,15 +6,14 @@
 # --platform=$BUILDPLATFORM 让此阶段始终在 amd64 上执行,加快构建。
 FROM --platform=$BUILDPLATFORM registry.cn-hangzhou.aliyuncs.com/lpx03/node:20.11.1-bookworm AS web
 WORKDIR /web
-# npm registry: 内网默认, CI 中可通过 --build-arg 传入公共 CN 代理。
+# npm registry: 内网默认, CI 中可通过 --build-arg 传入公共代理。
 ARG NPM_REGISTRY=http://192.168.0.12/repository/npm-group/
 RUN npm config set registry ${NPM_REGISTRY}
 # 先拷依赖描述,利用 docker 层缓存。
 COPY web/package*.json ./
-# npm install (而非 npm ci): lockfile 中每个包的 resolved URL 会固定指向
-# npm config 当时的 registry。CI 切换 registry 后 npm ci 不会重解析 URL,
-# 仍会尝试连接内网地址导致超时。npm install 则会根据当前 registry 重新下载。
-RUN npm install --no-audit --no-fund
+# 删除 lockfile 确保 npm install 完全走当前 registry 解析,
+# 避免 lockfile 中 resolved URL 指向不可达的内网地址。
+RUN rm -f package-lock.json && npm install --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 # 产物在 /web/dist
