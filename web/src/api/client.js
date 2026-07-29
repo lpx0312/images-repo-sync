@@ -30,15 +30,22 @@ client.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const msg = error.response?.data?.error || error.message || '请求失败'
+    // 请求的 URL,用于区分登录接口和其他接口。
+    const reqURL = error.config?.url || ''
 
     if (status === 401) {
-      const authStore = useAuthStore()
-      authStore.clearAuth()
-      // 避免在登录页重复跳转。
-      const { pathname, search } = window.location
-      if (!pathname.startsWith('/login')) {
-        const redirect = encodeURIComponent(pathname + search)
-        window.location.href = `/login?expired=1&redirect=${redirect}`
+      // 登录接口的 401 = 账号密码错误,直接弹提示,不要清 token/跳转。
+      if (reqURL.includes('/auth/login')) {
+        ElMessage.error(msg)
+      } else {
+        // 其他接口的 401 = token 过期/无效,清登录态并跳登录页。
+        const authStore = useAuthStore()
+        authStore.clearAuth()
+        const { pathname, search } = window.location
+        if (!pathname.startsWith('/login')) {
+          const redirect = encodeURIComponent(pathname + search)
+          window.location.href = `/login?expired=1&redirect=${redirect}`
+        }
       }
     } else if (status >= 500) {
       ElMessage.error('服务器异常,请稍后重试')

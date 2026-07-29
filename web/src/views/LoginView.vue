@@ -38,6 +38,7 @@
 
         <el-form-item prop="password">
           <el-input
+            ref="passwordInputRef"
             v-model="form.password"
             type="password"
             placeholder="密码"
@@ -77,7 +78,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { User, Lock, Warning } from '@element-plus/icons-vue'
@@ -88,6 +89,7 @@ const route = useRoute()
 const authStore = useAuthStore()
 
 const formRef = ref()
+const passwordInputRef = ref()
 const loading = ref(false)
 const showExpiredTip = ref(false)
 
@@ -125,8 +127,12 @@ async function handleLogin() {
     ElMessage.success('登录成功')
     const redirect = route.query.redirect || '/tasks'
     router.replace(redirect)
-  } catch {
-    // 错误已由 API 拦截器统一提示。
+  } catch (err) {
+    // 错误已由 API 拦截器统一弹提示;这里清空密码方便用户重输。
+    form.value.password = ''
+    // 等待 DOM 更新后聚焦密码框。
+    await nextTick()
+    passwordInputRef.value?.focus?.()
   } finally {
     loading.value = false
   }
