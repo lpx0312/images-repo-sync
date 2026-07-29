@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -155,18 +157,27 @@ func (h *CatalogHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.GET("/:id/projects", h.Projects)
 }
 
-// registryURL 根据 insecure 选择 https/http 并拼路径。
+// registryURL 拼出完整的 HTTPS URL。insecure(跳过 TLS 校验)不改变协议,
+// registry 一律走 HTTPS;真正的跳过证书校验在调用方用自定义 Transport 实现。
 func registryURL(host string, insecure bool, path string) string {
-	scheme := "https"
-	if insecure {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, host, path)
+	return fmt.Sprintf("https://%s%s", host, path)
 }
 
-// doRequest 带基础认证发请求,返回响应体。
-func doRequest(req *http.Request) ([]byte, int, error) {
-	resp, err := http.DefaultClient.Do(req)
+// insecureClient 是跳过 TLS 证书校验的 HTTP client(复用连接池)。
+var insecureClient = &http.Client{
+	Timeout: 20 * time.Second,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
+}
+
+// doRequest 发请求,返回响应体。insecure 为 true 时跳过 TLS 证书校验(自签证书)。
+func doRequest(req *http.Request, insecure bool) ([]byte, int, error) {
+	c := http.DefaultClient
+	if insecure {
+		c = insecureClient
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -193,7 +204,7 @@ func registryCatalog(req *http.Request, host, user, pass string, insecure bool) 
 	if h := basicAuthHeader(user, pass); h != "" {
 		r.Header.Set("Authorization", h)
 	}
-	body, code, err := doRequest(r)
+	body, code, err := doRequest(r, insecure)
 	if err != nil {
 		return nil, fmt.Errorf("请求仓库失败: %w", err)
 	}
@@ -264,7 +275,7 @@ func harborListRaw(req *http.Request, host, user, pass string, insecure bool, pa
 	}
 	// Harbor v2 必须带 Accept: application/json,否则可能 422。
 	r.Header.Set("Accept", "application/json")
-	body, code, err := doRequest(r)
+	body, code, err := doRequest(r, insecure)
 	if err != nil {
 		return nil, fmt.Errorf("请求 Harbor 失败: %w", err)
 	}

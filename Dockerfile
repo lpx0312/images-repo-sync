@@ -7,6 +7,7 @@
 FROM --platform=$BUILDPLATFORM registry.cn-hangzhou.aliyuncs.com/lpx03/node:20.11.1-bookworm AS web
 WORKDIR /web
 # npm registry: 内网默认, CI 中可通过 --build-arg 传入公共代理。
+# 例如内网不可达时: docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ARG NPM_REGISTRY=http://192.168.0.12/repository/npm-group/
 RUN npm config set registry ${NPM_REGISTRY}
 # 先拷依赖描述,利用 docker 层缓存。
@@ -27,6 +28,7 @@ FROM --platform=$BUILDPLATFORM registry.cn-hangzhou.aliyuncs.com/lpx03/golang:1.
 ARG TARGETARCH
 WORKDIR /src
 # Go proxy: 内网默认, CI 中通过 --build-arg 传入公共 CN 代理。
+# 例如内网不可达时: docker build --build-arg GOPROXY=https://goproxy.cn,direct
 ARG GOPROXY=http://192.168.0.12/repository/go-group/
 ARG GOSUMDB=off
 ENV GOPROXY=${GOPROXY} \

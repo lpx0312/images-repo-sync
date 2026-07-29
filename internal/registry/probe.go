@@ -31,13 +31,11 @@ func httpClient(insecure bool) *http.Client {
 	return &http.Client{Timeout: 15 * time.Second, Transport: t}
 }
 
-// baseURL 根据 insecure 选 https/http 并返回形如 "https://host[:port]" 的根。
+// baseURL 返回形如 "https://host[:port]" 的根。
+// 注意:insecure(跳过 TLS 校验)只影响证书验证,不改变协议——registry 一律走 HTTPS。
+// 若 registry 真的是纯 HTTP(无 TLS),应直接在 host 里体现(极少见,这里不支持)。
 func baseURL(host string, insecure bool) string {
-	scheme := "https"
-	if insecure {
-		scheme = "http"
-	}
-	return scheme + "://" + host
+	return "https://" + host
 }
 
 // basicAuth 返回 "Basic base64(user:pass)"。user/pass 为空则返回空串。
@@ -93,23 +91,23 @@ func readErrBody(resp *http.Response) string {
 // Probe 测试目标 registry 的连通性与凭证有效性。
 //
 // 采用 OCI/Docker Registry v2 标准流程(对所有 OCI 兼容 registry 通用):
-//  1. GET /v2/(带 Basic Auth):
-//     - 200 → 直接连通且凭证有效(公开 registry 或已认证)
-//     - 401 → 需要进一步走 Bearer token 流程(401 不是失败!)
+//  1. GET /v2/(不带认证,纯 ping):
+//     - 200 → registry 可达且为公开/无需认证,直接成功
+//     - 401 → 需要认证,从 WWW-Authenticate 头判断走 Bearer 还是 Basic 流程
 //     - 403 → 权限不足
 //     - 404/405 → 不是合法 registry
 //     - 连接错误/超时 → 网络不可达
-//  2. 仅当第 1 步返回 401 时:从 WWW-Authenticate 头解析 realm/service,
-//     用 Basic Auth 去 realm 拿 Bearer token:
-//     - realm 端点 401 → 真正的「用户名或密码错误」
-//     - 拿到 token 后带 Bearer 再访问 /v2/,200 → 成功
+//
+// 注意:第 1 步【不带认证】。若带了 Basic Auth,部分 registry(如 Harbor 2.x)
+// 会改返回 `Basic` challenge 而非 `Bearer` challenge,导致无法拿到 token realm。
+// 凭证校验放在后续 token 端点或 Basic 重试步骤中。
 func Probe(ctx context.Context, host, user, pass string, insecure bool) ProbeResult {
 	client := httpClient(insecure)
 	root := baseURL(host, insecure)
 	pingURL := root + "/v2/"
 
-	// 第 1 步:带 Basic Auth 打 /v2/。
-	resp, err := doGet(ctx, client, pingURL, basicAuth(user, pass))
+	// 第 1 步:不带认证打 /v2/,探测可达性并取回认证 challenge。
+	resp, err := doGet(ctx, client, pingURL, "")
 	if err != nil {
 		return classifyNetErr(err, host)
 	}
@@ -118,11 +116,11 @@ func Probe(ctx context.Context, host, user, pass string, insecure bool) ProbeRes
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// 200:直接成功(公开 registry 或 Basic Auth 直接通过)。
+		// 200:公开 registry,无需认证即可访问。
 		return ProbeResult{OK: true, Message: "连接成功", Endpoint: pingURL}
 	case http.StatusUnauthorized:
-		// 401:走 Bearer token 流程(ACR/Harbor/DockerHub 都是这条路径)。
-		return probeBearer(ctx, client, root, pingURL, resp, user, pass)
+		// 401:按 WWW-Authenticate 头判断走 Bearer 还是 Basic 流程。
+		return probeAuth(ctx, client, root, pingURL, resp, user, pass)
 	case http.StatusForbidden:
 		return ProbeResult{OK: false, Message: "权限不足:用户没有访问该仓库的权限", Endpoint: pingURL}
 	case http.StatusNotFound, http.StatusMethodNotAllowed:
@@ -132,18 +130,47 @@ func Probe(ctx context.Context, host, user, pass string, insecure bool) ProbeRes
 	}
 }
 
-// probeBearer 处理 401 后的 Bearer token 流程。
-func probeBearer(ctx context.Context, client *http.Client, root, pingURL string, pingResp *http.Response, user, pass string) ProbeResult {
+// probeAuth 根据 WWW-Authenticate 头类型分发到 Bearer 或 Basic 流程。
+func probeAuth(ctx context.Context, client *http.Client, root, pingURL string, pingResp *http.Response, user, pass string) ProbeResult {
 	authHeader := pingResp.Header.Get("WWW-Authenticate")
 	if authHeader == "" {
-		// 无 WWW-Authenticate 头的 401,通常是 Basic Auth 凭证错误。
-		return ProbeResult{OK: false, Message: "认证失败:用户名或密码错误", Endpoint: pingURL}
+		// 无 challenge 头的 401,无法继续。
+		return ProbeResult{OK: false, Message: "认证失败:无法获取认证方式", Endpoint: pingURL}
 	}
 
+	// Harbor 2.x 等会对【带凭证】的请求回 Basic challenge;但本流程第 1 步不带凭证,
+	// 所以这里拿到的应是 Bearer challenge(含 realm)。仍兼容 Basic challenge。
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		return probeBearer(ctx, client, root, pingURL, authHeader, user, pass)
+	}
+	// Basic challenge:带凭证重试一次 /v2/,200 即成功。
+	return probeBasic(ctx, client, pingURL, user, pass)
+}
+
+// probeBasic 处理 Basic challenge:带 Basic Auth 重试 /v2/。
+func probeBasic(ctx context.Context, client *http.Client, pingURL, user, pass string) ProbeResult {
+	resp, err := doGet(ctx, client, pingURL, basicAuth(user, pass))
+	if err != nil {
+		return classifyNetErr(err, pingURL)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return ProbeResult{OK: true, Message: "连接成功", Endpoint: pingURL}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return ProbeResult{OK: false, Message: "认证失败:用户名或密码错误", Endpoint: pingURL}
+	default:
+		return ProbeResult{OK: false, Message: fmt.Sprintf("认证后仍返回 %d", resp.StatusCode), Endpoint: pingURL}
+	}
+}
+
+// probeBearer 处理 Bearer challenge:用 Basic Auth 去 token 端点拿 Bearer token,
+// 再带 token 访问 /v2/ 验证。这是 ACR / Harbor / DockerHub 的标准认证流程。
+func probeBearer(ctx context.Context, client *http.Client, root, pingURL, authHeader, user, pass string) ProbeResult {
 	realm, service, ok := parseChallenge(authHeader)
 	if !ok {
-		// 非 Bearer challenge(如 Basic challenge)→ 凭证错。
-		return ProbeResult{OK: false, Message: "认证失败:用户名或密码错误", Endpoint: pingURL, Detail: "challenge: " + authHeader}
+		return ProbeResult{OK: false, Message: "认证失败:无法解析认证信息", Endpoint: pingURL, Detail: "challenge: " + authHeader}
 	}
 
 	// 第 2 步:用 Basic Auth 去 realm 拿 token。
