@@ -20,6 +20,9 @@
 
 # ---------- 项目配置 ----------
 PROJECT_NAME := images-repo-sync
+# GIT_SHA: commit 短 sha(如 4f5fb2a),用于在镜像仓库里和 commit 一一对应。
+# VERSION: git describe 语义版本(如 v1.0.0-1-g4f5fb2a),带 tag 上下文。
+GIT_SHA      := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 VERSION      := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BUILD_TIME   := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
@@ -36,6 +39,7 @@ ALIYUN_REGISTRY  := registry.cn-hangzhou.aliyuncs.com
 ALIYUN_NAMESPACE ?= lpx03
 REMOTE_IMAGE     := $(ALIYUN_REGISTRY)/$(ALIYUN_NAMESPACE)/$(PROJECT_NAME)
 REMOTE_LATEST    := $(REMOTE_IMAGE):latest
+REMOTE_SHA       := $(REMOTE_IMAGE):$(GIT_SHA)
 REMOTE_VERSION   := $(REMOTE_IMAGE):$(VERSION)
 
 # 多架构平台(buildx)。
@@ -140,7 +144,7 @@ build-multiarch: ensure-builder ## 多架构构建(amd64+arm64, 仅本地 buildx
 	@docker buildx build \
 		--builder $(BUILDER) \
 		--platform $(PLATFORMS) \
-		-t $(REMOTE_LATEST) -t $(REMOTE_VERSION) \
+		-t $(REMOTE_LATEST) -t $(REMOTE_SHA) -t $(REMOTE_VERSION) \
 		--load=false \
 		.
 	@echo "$(GREEN)✅ 多架构构建完成(缓存已生成)$(RESET)"
@@ -151,12 +155,13 @@ build-push: ensure-builder login ## 多架构构建并推送到阿里云(一键�
 	@docker buildx build \
 		--builder $(BUILDER) \
 		--platform $(PLATFORMS) \
-		-t $(REMOTE_LATEST) -t $(REMOTE_VERSION) \
+		-t $(REMOTE_LATEST) -t $(REMOTE_SHA) -t $(REMOTE_VERSION) \
 		--push \
 		.
 	@echo "$(GREEN)✅ 多架构镜像已推送:$(RESET)"
-	@echo "  $(GREEN)$(REMOTE_LATEST)$(RESET)"
-	@echo "  $(GREEN)$(REMOTE_VERSION)$(RESET)"
+	@echo "  $(GREEN)$(REMOTE_LATEST)$(RESET)   <- 最新版"
+	@echo "  $(GREEN)$(REMOTE_SHA)$(RESET)       <- 当前 commit 短 sha"
+	@echo "  $(GREEN)$(REMOTE_VERSION)$(RESET)   <- 语义版本"
 	@echo ""
 	@echo "$(CYAN)拉取命令: docker pull $(REMOTE_LATEST)$(RESET)"
 	@echo "$(CYAN)运行命令: docker run -d -p 8080:8080 -v \$$PWD/data:/data $(REMOTE_LATEST)$(RESET)"
