@@ -128,7 +128,7 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 			SourceRef: it.SourceRef,
 			TargetRef: it.TargetRef,
 		})
-		updateItem(db, it.ID, map[string]any{"status": "running", "started_at": time.Now()})
+		updateItem(db, it.ID, map[string]any{"status": model.ItemStatusRunning, "started_at": time.Now()})
 
 		// 广播日志行。
 		res := skopeo.Copy(ctx, skopeo.CopyOptions{
@@ -155,7 +155,7 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 				digest = d
 			}
 			updateItem(db, it.ID, map[string]any{
-				"status": "success", "digest": digest, "finished_at": finishedAt, "error": "",
+				"status": model.ItemStatusSuccess, "digest": digest, "finished_at": finishedAt, "error": "",
 			})
 			m.emit(taskID, EventItemSuccess, Event{
 				ItemID: it.ID, SourceRef: it.SourceRef, TargetRef: it.TargetRef, Data: map[string]any{"digest": digest},
@@ -163,13 +163,13 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		} else if ctx.Err() != nil {
 			// 任务被取消:当前 item 置 skipped,并跳出循环,剩余未执行 item 在循环外统一标记。
 			skipped++
-			updateItem(db, it.ID, map[string]any{"status": "skipped", "finished_at": finishedAt})
+			updateItem(db, it.ID, map[string]any{"status": model.ItemStatusSkipped, "finished_at": finishedAt})
 			m.emit(taskID, EventItemFailed, Event{ItemID: it.ID, Message: "已取消"})
 			break
 		} else {
 			failed++
 			updateItem(db, it.ID, map[string]any{
-				"status": "failed", "error": res.StderrTail, "finished_at": finishedAt,
+				"status": model.ItemStatusFailed, "error": res.StderrTail, "finished_at": finishedAt,
 			})
 			m.emit(taskID, EventItemFailed, Event{
 				ItemID: it.ID, SourceRef: it.SourceRef, TargetRef: it.TargetRef, Message: res.StderrTail,
@@ -181,23 +181,23 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 	if ctx.Err() != nil {
 		now := time.Now()
 		if err := db.Table("sync_task_items").
-			Where("task_id = ? AND status IN ?", taskID, []string{"pending", "running"}).
-			Updates(map[string]any{"status": "skipped", "finished_at": now}).Error; err != nil {
+			Where("task_id = ? AND status IN ?", taskID, []string{model.ItemStatusPending, model.ItemStatusRunning}).
+			Updates(map[string]any{"status": model.ItemStatusSkipped, "finished_at": now}).Error; err != nil {
 			log.Printf("[task] 标记剩余 item 为 skipped 失败: %v", err)
 		}
 		// 统计被跳过的数量(查询而不是猜)。
 		var skipCount int64
-		db.Table("sync_task_items").Where("task_id = ? AND status = 'skipped'", taskID).Count(&skipCount)
+		db.Table("sync_task_items").Where("task_id = ? AND status = ?", taskID, model.ItemStatusSkipped).Count(&skipCount)
 		skipped = int(skipCount)
 	}
 
 	// 3. 更新任务终态。
-	finalStatus := "success"
+	finalStatus := model.TaskStatusSuccess
 	taskErrMsg := ""
 	if ctx.Err() != nil {
-		finalStatus = "canceled"
+		finalStatus = model.TaskStatusCanceled
 	} else if failed > 0 {
-		finalStatus = "failed"
+		finalStatus = model.TaskStatusFailed
 		taskErrMsg = fmt.Sprintf("%d 条镜像同步失败", failed)
 	}
 	now := time.Now()
