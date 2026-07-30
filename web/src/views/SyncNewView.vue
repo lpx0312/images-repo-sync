@@ -189,6 +189,8 @@ import { useRouter } from 'vue-router'
 import { Back } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { registryAPI, taskAPI, catalogAPI, settingsAPI } from '@/api'
+import { resolveTarget } from '@/utils/ref'
+import { MODE_REPLACE_HOST } from '@/utils/constants'
 import ModePreview from '@/components/ModePreview.vue'
 import CatalogBrowser from '@/components/CatalogBrowser.vue'
 
@@ -246,7 +248,7 @@ const effectiveProject = computed(() => form.targetProject || targetRegistry.val
 
 const canStep2Next = computed(() => {
   if (!form.targetRegistryId) return false
-  if (form.mode !== 'replace_host' && !effectiveProject.value) return false
+  if (form.mode !== MODE_REPLACE_HOST && !effectiveProject.value) return false
   return true
 })
 
@@ -333,52 +335,6 @@ onMounted(async () => {
     /* 读取失败用代码默认值 amd64 */
   }
 })
-
-// ===== 前端复刻后端解析(与 ModePreview 一致) =====
-function resolveTarget(srcRef, targetHost, mode, project) {
-  const [, srcPath] = parseSource(srcRef)
-  if (!srcPath) return ''
-  targetHost = (targetHost || '').trim().replace(/\/+$/, '')
-  project = (project || '').trim()
-  if (mode === 'flat') return project ? `${targetHost}/${project}/${tagPart(srcPath)}` : ''
-  if (mode === 'preserve_path') return project ? `${targetHost}/${project}/${srcPath}` : ''
-  if (mode === 'replace_host') return `${targetHost}/${srcPath}`
-  return ''
-}
-function parseSource(raw) {
-  raw = (raw || '').trim()
-  if (!raw) return ['', '']
-  raw = raw.replace(/^docker:\/\//, '')
-  const slash = raw.indexOf('/')
-  let host, path
-  if (slash < 0) {
-    host = 'docker.io'
-    path = raw
-  } else {
-    const first = raw.slice(0, slash)
-    const rest = raw.slice(slash + 1)
-    if (isHost(first)) {
-      host = first
-      path = rest
-    } else {
-      host = 'docker.io'
-      path = raw
-    }
-  }
-  if ((host === 'docker.io' || host === 'index.docker.com') && !path.includes('/')) {
-    path = 'library/' + path
-  }
-  if (path && !tagPart(path).includes(':')) path += ':latest'
-  return [host, path]
-}
-function isHost(s) {
-  if (s === 'localhost') return true
-  return s.includes('.') || s.includes(':')
-}
-function tagPart(path) {
-  const i = path.lastIndexOf('/')
-  return i >= 0 ? path.slice(i + 1) : path
-}
 </script>
 
 <style scoped>

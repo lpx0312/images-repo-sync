@@ -1,10 +1,15 @@
 package task
 
 import (
+	"errors"
+
 	"gorm.io/gorm"
 
 	"images-repo-sync/internal/crypto"
 )
+
+// errAlreadyCanceled 表示任务在 worker 取到前已被用户取消,worker 应跳过不执行。
+var errAlreadyCanceled = errors.New("任务已取消")
 
 // syncTaskItemWithRefs 是 worker 执行时需要的 item 最小字段。
 type syncTaskItemWithRefs struct {
@@ -15,8 +20,9 @@ type syncTaskItemWithRefs struct {
 
 // taskLoader 用于加载任务执行所需字段。
 type taskLoader struct {
-	ID   uint   `gorm:"column:id"`
-	Arch string `gorm:"column:arch"`
+	ID     uint   `gorm:"column:id"`
+	Arch   string `gorm:"column:arch"`
+	Status string `gorm:"column:status"`
 }
 
 // registryCreds 是任务执行时需要的仓库凭证(已解密)。

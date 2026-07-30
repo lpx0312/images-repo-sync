@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"images-repo-sync/internal/model"
 	"images-repo-sync/internal/skopeo"
 	"images-repo-sync/internal/store"
 )
@@ -23,7 +24,7 @@ func (m *Manager) worker() {
 }
 
 // runTask 执行单个同步任务:加载任务和明细 → 逐条 skopeo copy → 更新状态。
-func (m *Manager) runTask(taskID uint) error {
+func (m *Manager) runTask(taskID uint) (retErr error) {
 	db := store.DB
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -33,13 +34,41 @@ func (m *Manager) runTask(taskID uint) error {
 		m.ClearCancel(taskID)
 	}()
 
-	// 1. 加载任务及明细,标记 running。
+	// 兜底:任何提前 return 的错误路径都把任务置为 failed,避免卡在 pending/running。
+	// (正常结束时 retErr 为 nil,且终态已在下方更新,这里不会覆盖。)
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		now := time.Now()
+		// 若任务已被取消(ctx 取消),置 canceled 而非 failed。
+		status := model.TaskStatusFailed
+		if ctx.Err() != nil {
+			status = model.TaskStatusCanceled
+		}
+		if err := db.Table("sync_tasks").Where("id = ?", taskID).Updates(map[string]any{
+			"status":      status,
+			"error":       retErr.Error(),
+			"finished_at": now,
+		}).Error; err != nil {
+			log.Printf("[task] 兜底置 %s 失败(任务 %d): %v", status, taskID, err)
+		}
+		m.emit(taskID, EventTaskFinished, Event{
+			Data: map[string]any{"status": status, "error": retErr.Error()},
+		})
+	}()
+
+	// 1. 加载任务及明细。先检查是否已被取消(用户可能在 worker 取到前点取消)。
 	var items []syncTaskItemWithRefs
 	var arch string // 从任务读取的目标架构,稍后传给 skopeo.Copy
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		var t taskLoader
 		if err := tx.Table("sync_tasks").Where("id = ?", taskID).First(&t).Error; err != nil {
 			return err
+		}
+		// P0-1 修复:若任务已被取消,直接退出,不置 running。
+		if t.Status == model.TaskStatusCanceled {
+			return errAlreadyCanceled
 		}
 		arch = t.Arch
 		if err := tx.Table("sync_task_items").
@@ -50,11 +79,14 @@ func (m *Manager) runTask(taskID uint) error {
 		}
 		now := time.Now()
 		return tx.Table("sync_tasks").Where("id = ?", taskID).Updates(map[string]any{
-			"status":     "running",
+			"status":     model.TaskStatusRunning,
 			"started_at": now,
 			"total":      len(items),
 		}).Error
 	}); err != nil {
+		if err == errAlreadyCanceled {
+			return nil // 已取消,不算错误
+		}
 		return err
 	}
 

@@ -27,9 +27,11 @@
 
 <script setup>
 import { Right } from '@element-plus/icons-vue'
+import { resolveTarget } from '@/utils/ref'
+import { MODE_FLAT, MODE_PRESERVE_PATH, MODE_REPLACE_HOST } from '@/utils/constants'
 
 const props = defineProps({
-  modelValue: { type: String, default: 'flat' },
+  modelValue: { type: String, default: MODE_FLAT },
   example: { type: String, default: '' }, // 当前选中的代表性源镜像
   targetHost: { type: String, default: '' },
   project: { type: String, default: '' },
@@ -38,19 +40,19 @@ defineEmits(['update:modelValue'])
 
 const modes = [
   {
-    value: 'flat',
+    value: MODE_FLAT,
     label: '① 单一项目(扁平)',
     desc: '进入目标 project,只保留镜像名 + tag,丢弃中间路径',
     disabled: false,
   },
   {
-    value: 'preserve_path',
+    value: MODE_PRESERVE_PATH,
     label: '② 保持源项目路径',
     desc: '进入目标 project,且源 host 后完整路径原样保留',
     disabled: false,
   },
   {
-    value: 'replace_host',
+    value: MODE_REPLACE_HOST,
     label: '③ 仅替换仓库地址',
     desc: '不加 project 前缀,只把源 host 换成目标 host',
   },
@@ -58,66 +60,6 @@ const modes = [
 
 function compute(mode) {
   return resolveTarget(props.example, props.targetHost, mode, props.project)
-}
-
-// ===== 以下解析逻辑与后端 internal/skopeo/ref.go 保持一致 =====
-
-// parseSource: 返回 [host, path],处理隐式 docker.io 与 library。
-function parseSource(raw) {
-  raw = (raw || '').trim()
-  if (!raw) return ['', '']
-  raw = raw.replace(/^docker:\/\//, '')
-  const slash = raw.indexOf('/')
-  let host, path
-  if (slash < 0) {
-    host = 'docker.io'
-    path = raw
-  } else {
-    const first = raw.slice(0, slash)
-    const rest = raw.slice(slash + 1)
-    if (isHost(first)) {
-      host = first
-      path = rest
-    } else {
-      host = 'docker.io'
-      path = raw
-    }
-  }
-  if ((host === 'docker.io' || host === 'index.docker.com') && !path.includes('/')) {
-    path = 'library/' + path
-  }
-  if (path && !tagPart(path).includes(':')) path += ':latest'
-  return [host, path]
-}
-
-function isHost(s) {
-  if (s === 'localhost') return true
-  return s.includes('.') || s.includes(':')
-}
-
-function tagPart(path) {
-  const i = path.lastIndexOf('/')
-  return i >= 0 ? path.slice(i + 1) : path
-}
-
-// resolveTarget: 与后端 ResolveTarget 等价。
-function resolveTarget(srcRef, targetHost, mode, project) {
-  const [, srcPath] = parseSource(srcRef)
-  if (!srcPath) return ''
-  targetHost = (targetHost || '').trim().replace(/\/+$/, '')
-  project = (project || '').trim()
-  if (mode === 'flat') {
-    if (!project) return ''
-    return `${targetHost}/${project}/${tagPart(srcPath)}`
-  }
-  if (mode === 'preserve_path') {
-    if (!project) return ''
-    return `${targetHost}/${project}/${srcPath}`
-  }
-  if (mode === 'replace_host') {
-    return `${targetHost}/${srcPath}`
-  }
-  return ''
 }
 </script>
 

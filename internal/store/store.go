@@ -22,8 +22,9 @@ var DB *gorm.DB
 // 使用 glebarez/sqlite(modernc 纯 Go 驱动),无需 CGO,Docker 静态构建更干净。
 func Init() error {
 	cfg := config.AppConfig
-	// _pragma 配置开启外键约束,并使用 BUSY_TIMEOUT 避免并发写冲突。
-	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", cfg.DBPath)
+	// _pragma: foreign_keys 开外键约束; journal_mode(WAL) 允许读写并发(SSE 长连接场景关键);
+	// busy_timeout 提到 10s,避免 worker 写与 API 读争用导致 database is locked。
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)", cfg.DBPath)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
@@ -31,13 +32,14 @@ func Init() error {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
 
-	// SQLite 并发性能调优。
+	// SQLite 并发性能调优。WAL 模式下可允许多个读连接 + 单写。
 	sqlDB, err := db.DB()
 	if err != nil {
 		return fmt.Errorf("获取底层 sql.DB 失败: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(1) // SQLite 写串行,单连接避免锁冲突
-	sqlDB.SetMaxIdleConns(1)
+	// WAL 模式支持多读单写,适当放开读连接数;写仍由 SQLite 串行化(busy_timeout 兜底)。
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(2)
 	sqlDB.SetConnMaxLifetime(0)
 
 	if err := db.AutoMigrate(

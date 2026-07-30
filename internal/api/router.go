@@ -20,12 +20,26 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// CORS:开发期前端在 :3000、后端在 :8080;生产同源。
+	// CORS:仅放行本地开发前端(Vite dev server, 通常 :3000/:5173)与同源请求。
+	// 生产环境前后端同源,不需要跨域。鉴权用 Bearer token(非 cookie),无需 AllowCredentials。
 	r.Use(cors.New(cors.Config{
-		AllowOriginFunc:  func(string) bool { return true },
+		AllowOriginFunc: func(origin string) bool {
+			// 同源(空 Origin 或与后端同 host)直接放行。
+			if origin == "" {
+				return true
+			}
+			// 本地开发前端。
+			for _, p := range []string{"http://localhost:3000", "http://127.0.0.1:3000",
+				"http://localhost:5173", "http://127.0.0.1:5173"} {
+				if origin == p {
+					return true
+				}
+			}
+			return false
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 	}))
 
 	api := r.Group("/api")
@@ -79,7 +93,23 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 }
 
 // serveContent 把一个 fs.File 原样输出(用于 favicon 等小文件)。
+// 根据扩展名设置正确的 Content-Type,否则浏览器不识别(如 favicon.svg 被当文本)。
 func serveContent(c *gin.Context, f fs.File) {
+	path := c.Request.URL.Path
+	switch {
+	case strings.HasSuffix(path, ".svg"):
+		c.Header("Content-Type", "image/svg+xml")
+	case strings.HasSuffix(path, ".png"):
+		c.Header("Content-Type", "image/png")
+	case strings.HasSuffix(path, ".ico"):
+		c.Header("Content-Type", "image/x-icon")
+	case strings.HasSuffix(path, ".json"):
+		c.Header("Content-Type", "application/json")
+	case strings.HasSuffix(path, ".js"):
+		c.Header("Content-Type", "application/javascript")
+	case strings.HasSuffix(path, ".css"):
+		c.Header("Content-Type", "text/css")
+	}
 	c.Header("Cache-Control", "no-cache")
 	_, _ = io.Copy(c.Writer, f)
 }

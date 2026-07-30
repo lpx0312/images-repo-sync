@@ -275,17 +275,10 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 	subID, ch := task.Instance().Subscribe(uint(id))
 	defer task.Instance().Unsubscribe(uint(id), subID)
 
-	// 心跳,避免代理超时断连。
+	// 心跳与事件共用同一 select,避免 goroutine 并发写 c.Writer 导致 SSE 帧损坏。
+	// (Gin ResponseWriter 非并发安全,两个 goroutine 交错 Fprintf 会让客户端 JSON 解析失败。)
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	go func() {
-		for range ticker.C {
-			fmt.Fprintf(c.Writer, ": ping\n\n")
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-	}()
 
 	notify := c.Request.Context().Done()
 	for {
@@ -297,6 +290,12 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 			writeSSE(ev)
 			if ev.Type == task.EventTaskFinished {
 				return
+			}
+		case <-ticker.C:
+			// SSE 心跳(注释行),防止反向代理因空闲超时断连。
+			fmt.Fprintf(c.Writer, ": ping\n\n")
+			if flusher != nil {
+				flusher.Flush()
 			}
 		case <-notify:
 			return
