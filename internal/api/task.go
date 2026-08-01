@@ -255,9 +255,12 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 			case model.ItemStatusFailed:
 				evt.Type = task.EventItemFailed
 				evt.Message = it.Error
-			default: // skipped / pending
+			case model.ItemStatusSkipped:
 				evt.Type = task.EventItemFailed
 				evt.Message = "跳过"
+			default: // pending / running:任务已结束但 item 未执行完(任务级错误中断)
+				evt.Type = task.EventItemFailed
+				evt.Message = "未执行(任务中断)"
 			}
 			writeSSE(evt)
 		}

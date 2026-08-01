@@ -46,6 +46,17 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		if ctx.Err() != nil {
 			status = model.TaskStatusCanceled
 		}
+		// 任务级失败时,把尚未执行完的 item(pending/running)统一标记为 failed/skipped,
+		// 否则前端回放会因 item 停在 pending 而显示"跳过",造成"重试被跳过"的误解。
+		itemStatus := model.ItemStatusFailed
+		if status == model.TaskStatusCanceled {
+			itemStatus = model.ItemStatusSkipped
+		}
+		if err := db.Table("sync_task_items").
+			Where("task_id = ? AND status IN ?", taskID, []string{model.ItemStatusPending, model.ItemStatusRunning}).
+			Updates(map[string]any{"status": itemStatus, "finished_at": now, "error": retErr.Error()}).Error; err != nil {
+			log.Printf("[task] 兜底标记剩余 item 为 %s 失败(任务 %d): %v", itemStatus, taskID, err)
+		}
 		if err := db.Table("sync_tasks").Where("id = ?", taskID).Updates(map[string]any{
 			"status":      status,
 			"error":       retErr.Error(),
