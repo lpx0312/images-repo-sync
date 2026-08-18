@@ -31,7 +31,6 @@ type createTaskRequest struct {
 	TargetProject    string   `json:"target_project"`
 	Arch             string   `json:"arch"` // amd64 / arm64 / all;空按 amd64
 	Refs             []string `json:"refs" binding:"required"`
-	PreserveDigests  bool     `json:"preserve_digests"`
 }
 
 // Create POST /api/tasks

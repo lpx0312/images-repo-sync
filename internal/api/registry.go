@@ -41,7 +41,7 @@ func (d *registryDTO) toModel(existing *model.Registry) (*model.Registry, error)
 	if d.Type != "" {
 		m.Type = d.Type
 	} else if m.Type == "" {
-		m.Type = "generic"
+		m.Type = model.RegistryTypeGeneric
 	}
 	m.Username = d.Username
 	m.Insecure = d.Insecure

@@ -3,6 +3,7 @@ package skopeo
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // 架构选择常量。
@@ -100,6 +101,14 @@ func Copy(ctx context.Context, opt CopyOptions, handler LineHandler) CopyResult 
 	return CopyResult{OK: false, StderrTail: detail}
 }
 
+// IsPreserveDigestsConflict 判断 copy 失败输出是否属于「--preserve-digests 与目标格式不兼容」:
+// 目标仓库拒绝了源镜像的 manifest 格式(如华为 SWR 基础版拒收顶层 OCI image index),
+// skopeo 需要转换成目标支持的格式(如 Docker manifest list),但被 --preserve-digests 禁止改写。
+// 该场景下去掉 --preserve-digests 重试即可成功(skopeo 在无需转换时仍会保持原 digest)。
+func IsPreserveDigestsConflict(stderrTail string) bool {
+	return strings.Contains(stderrTail, "Instructed to preserve digests")
+}
+
 // ringBuffer 是定长的环形缓冲,只保留最近 N 行,用于截取命令尾部输出。
 type ringBuffer struct {
 	n   int
@@ -160,23 +169,29 @@ func InspectDigest(ctx context.Context, ref, host, user, pass string, insecure b
 		args = []string{"inspect", "--tls-verify=false", "--authfile", authPath, "docker://" + ref}
 	}
 
-	var raw string
-	if err := runWithStream(ctx, args, func(line string) { raw = line }); err != nil {
-		return "", fmt.Errorf("inspect 失败: %w", err)
-	}
-	// skopeo inspect 默认输出人读格式,含 "Digest: sha256:..."。
-	// 这里做简单抽取,避免依赖 json 解析的格式差异。
-	for _, prefix := range []string{"Digest: ", "\"Digest\": \""} {
-		if i := indexOf(raw, prefix); i >= 0 {
-			rest := raw[i+len(prefix):]
-			end := indexOfAny(rest, " \t\r\n\",")
-			if end < 0 {
-				end = len(rest)
+	// 逐行扫描,命中 Digest 即提取。skopeo inspect 的 Digest 不在最后一行
+	// (人类格式在第 3 行附近,JSON 格式后面还有 RepoTags/Layers 等多行),不能只留末行。
+	var digest string
+	scan := func(line string) {
+		if digest != "" {
+			return
+		}
+		for _, prefix := range []string{"Digest: ", "\"Digest\": \""} {
+			if i := indexOf(line, prefix); i >= 0 {
+				rest := line[i+len(prefix):]
+				end := indexOfAny(rest, " \t\r\n\",")
+				if end < 0 {
+					end = len(rest)
+				}
+				digest = rest[:end]
+				return
 			}
-			return rest[:end], nil
 		}
 	}
-	return "", nil
+	if err := runWithStream(ctx, args, scan); err != nil {
+		return "", fmt.Errorf("inspect 失败: %w", err)
+	}
+	return digest, nil
 }
 
 func indexOf(s, sub string) int {

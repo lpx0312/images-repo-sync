@@ -33,6 +33,15 @@ const (
 	ModeReplaceHost  = "replace_host" // 不加 project 前缀,只换 host
 )
 
+// 仓库类型常量。
+const (
+	RegistryTypeGeneric   = "generic"   // 通用 OCI/Docker Registry v2
+	RegistryTypeHarbor    = "harbor"    // Harbor(走 v2 API 列 project/repo)
+	RegistryTypeDockerHub = "dockerhub" // Docker Hub
+	RegistryTypeACR       = "acr"       // 阿里云 ACR
+	RegistryTypeSWR       = "swr"       // 华为云 SWR:拒收顶层 OCI image index,作目标时需允许格式转换
+)
+
 // 登录日志状态常量。
 const (
 	LoginStatusSuccess = "success"

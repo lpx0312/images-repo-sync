@@ -62,7 +62,7 @@ func (h *CatalogHandler) Repos(c *gin.Context) {
 
 	var repos []string
 	switch strings.ToLower(m.Type) {
-	case "harbor":
+	case model.RegistryTypeHarbor:
 		repos, err = harborRepos(c.Request, m.Host, m.Username, pass, m.Insecure, project)
 	default:
 		repos, err = registryCatalog(c.Request, m.Host, m.Username, pass, m.Insecure)
@@ -133,7 +133,7 @@ func (h *CatalogHandler) Projects(c *gin.Context) {
 		return
 	}
 
-	if strings.ToLower(m.Type) != "harbor" {
+	if strings.ToLower(m.Type) != model.RegistryTypeHarbor {
 		// 非 Harbor 仓库:返回不支持,前端走手输模式。
 		ok(c, gin.H{"ok": false, "supported": false, "projects": []string{}, "default_project": m.DefaultProject})
 		return

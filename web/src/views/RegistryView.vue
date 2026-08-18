@@ -67,8 +67,12 @@
             <el-option label="Harbor" value="harbor" />
             <el-option label="Docker Hub" value="dockerhub" />
             <el-option label="阿里云 ACR" value="acr" />
+            <el-option label="华为云 SWR" value="swr" />
             <el-option label="通用 Registry" value="generic" />
           </el-select>
+          <div v-if="form.type === 'swr'" class="form-tip" style="margin-top: 4px">
+            SWR 基础版不支持 OCI 多架构 index:作为同步目标时会自动转换格式(仅顶层 digest 变化,镜像内容不变)
+          </div>
         </el-form-item>
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" placeholder="可选" />

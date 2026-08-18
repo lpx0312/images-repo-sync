@@ -127,6 +127,16 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		Data: map[string]any{"total": len(items)},
 	})
 
+	// 华为 SWR 基础版拒收顶层 OCI image index;带 --preserve-digests 时 skopeo 无法把
+	// OCI index 转成 Docker manifest list,推送必然失败。目标为 SWR 时关闭 digest 严格保留。
+	// skopeo 在无需格式转换时本就保持原 manifest,因此实际变化的只有被转换的顶层 digest。
+	preserveDigests := dstCreds.Type != model.RegistryTypeSWR
+	if !preserveDigests {
+		m.emit(taskID, EventItemProgress, Event{
+			Message: "目标仓库类型为华为云 SWR:已关闭 digest 严格保留,OCI 多架构镜像将自动转换为 Docker manifest list(仅顶层 digest 变化)",
+		})
+	}
+
 	// 2. 逐条执行 copy。
 	succeeded, failed, skipped := 0, 0, 0
 	for _, it := range items {
@@ -142,20 +152,33 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		updateItem(db, it.ID, map[string]any{"status": model.ItemStatusRunning, "started_at": time.Now()})
 
 		// 广播日志行。
-		res := skopeo.Copy(ctx, skopeo.CopyOptions{
+		logHandler := func(line string) {
+			m.emit(taskID, EventItemProgress, Event{
+				ItemID: it.ID, Message: line,
+			})
+		}
+		copyOpt := skopeo.CopyOptions{
 			SrcRef:          it.SourceRef,
 			SrcAuthFile:     srcAuth,
 			SrcInsecure:     srcCreds.Insecure,
 			DstRef:          it.TargetRef,
 			DstAuthFile:     dstAuth,
 			DstInsecure:     dstCreds.Insecure,
-			PreserveDigests: true,
+			PreserveDigests: preserveDigests,
 			Arch:            arch,
-		}, func(line string) {
+		}
+		res := skopeo.Copy(ctx, copyOpt, logHandler)
+
+		// 兜底:目标仓库没配成 SWR 类型、但同样拒收当前 manifest 格式时(如 SWR 被配成
+		// generic),按报错特征识别后去掉 --preserve-digests 转换格式重试一次,避免整条失败。
+		if !res.OK && ctx.Err() == nil && copyOpt.PreserveDigests && skopeo.IsPreserveDigestsConflict(res.StderrTail) {
 			m.emit(taskID, EventItemProgress, Event{
-				ItemID: it.ID, Message: line,
+				ItemID: it.ID,
+				Message: "目标仓库拒绝当前 manifest 格式,关闭 digest 严格保留并转换格式后重试...",
 			})
-		})
+			copyOpt.PreserveDigests = false
+			res = skopeo.Copy(ctx, copyOpt, logHandler)
+		}
 
 		finishedAt := time.Now()
 		if res.OK {
