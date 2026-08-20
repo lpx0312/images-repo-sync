@@ -7,7 +7,7 @@
 # 常用命令：
 #   make help              - 查看全部命令
 #   make build             - 本地构建单架构镜像(amd64, 可立即 docker run)
-#   make up / down         - 启动/停止服务(docker compose)
+#   make up / down         - 启动/停止服务(docker run 本地镜像)
 #   make build-multiarch   - 多架构构建(amd64+arm64, 仅本地 manifest)
 #   make build-push        - 多架构构建并推送到阿里云(一键发布)
 #
@@ -170,7 +170,8 @@ build-push: ensure-builder login ## 多架构构建并推送到阿里云(一键�
 # 服务管理(本地 docker run,不走 docker compose 避免内网 pull 卡死)
 # ============================================================================
 
-# 从 .env 读取运行时配置;文件不存在或变量缺失时用开发默认值,保证开箱即用。
+# 运行时配置可通过环境变量或 make 参数覆盖;未设置时用下面的开发默认值,保证开箱即用。
+# 注意: make up 不会自动读取 .env(那是 docker compose / make up-compose 的行为)。
 # 这些值仅用于本地测试,生产请显式覆盖: make up JWT_SECRET=xxx ENCRYPT_KEY=xxx
 JWT_SECRET   ?= dev-jwt-secret-change-me
 ENCRYPT_KEY  ?= dev-encrypt-key-change-me
@@ -324,5 +325,5 @@ _show_url:
 	@echo "$(CYAN)🌐 访问地址:$(RESET)"
 	@echo "  $(GREEN)前端/API:$(RESET) http://localhost:$(PORT)"
 	@echo "  $(GREEN)健康检查:$(RESET) http://localhost:$(PORT)/api/healthz"
-	@echo "  $(GREEN)默认账号:$(RESET) admin / (见 .env 的 ADMIN_PASSWORD)"
+	@echo "  $(GREEN)默认账号:$(RESET) admin / $(ADMIN_PASSWORD)  (make up 开发默认值; compose 请看 .env 的 ADMIN_PASSWORD)"
 	@echo ""

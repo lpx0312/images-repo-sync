@@ -1,15 +1,14 @@
 name: Docker Build and Push
 
 # =============================================================================
-# 触发条件: 推送 v* 格式的 tag (如 v1.0.0、v2.3.1)
+# 触发条件: 推送任意分支/tag 的 commit
 # 构建产物: linux/amd64 + linux/arm64 多架构镜像
 # 推送目标: 阿里云容器镜像服务 (ACR)
+# 镜像标签: 默认分支 :latest; 每次提交 commit 短 sha; 分支名; v* tag 时额外打 semver
 # =============================================================================
 
 on:
   push:
-    tags:
-      - 'v*'
 
 env:
   REGISTRY: ${{ vars.ALIYUN_REGISTRY }}
@@ -53,7 +52,7 @@ jobs:
 
       # -------------------------------------------------------------------
       # 5. 生成镜像 tag 和 label 元数据
-      #     latest=auto: 只有稳定版 tag (不含 -beta/-rc) 才打 :latest
+      #     默认分支打 :latest; 每次提交打 commit 短 sha (与 Makefile / Gitea 对应)
       # -------------------------------------------------------------------
       - name: Docker metadata
         id: meta
@@ -61,15 +60,19 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
           flavor: |
-            latest=auto
+            latest=false
           tags: |
-            # 完整的 tag 名 (如 v1.2.3)
+            # 默认分支 (main) 打 latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # commit 短 sha (如 4f5fb2a),与 Makefile 一致
+            type=sha,format=short,prefix=
+            # 分支名 (如 main)
+            type=ref,event=branch
+            # git tag 名 (如 v1.2.3)
             type=ref,event=tag
-            # 语义化版本 (如 1.2.3)
+            # 语义化版本 (仅推送 semver tag 时生效)
             type=semver,pattern={{version}}
-            # 主版本.次版本 (如 1.2)
             type=semver,pattern={{major}}.{{minor}}
-            # 主版本 (如 1)
             type=semver,pattern={{major}}
 
       # -------------------------------------------------------------------
