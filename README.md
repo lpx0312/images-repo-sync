@@ -140,7 +140,7 @@ make build-push ALIYUN_USERNAME=你的账号 ALIYUN_PASSWORD=你的密码
 
 推送到其他命名空间：`make build-push ALIYUN_NAMESPACE=你的命名空间 ALIYUN_USERNAME=... ALIYUN_PASSWORD=...`
 
-GitHub Actions 需手动触发：在仓库 Actions 页选择 **Docker Build and Push** 后 Run workflow，或执行 `gh workflow run "Docker Build and Push" --repo lpx0312/images-repo-sync --ref main`。构建 `linux/amd64` + `linux/arm64` 并推送到阿里云 ACR。默认分支额外打 `:latest`，每次构建打 commit 短 sha 标签（仓库地址由 Actions 变量配置）。
+向 GitHub 推送任意 commit 会触发 GitHub Actions，也可在 Actions 页手动 Run workflow。构建 `linux/amd64` + `linux/arm64` 并推送到阿里云 ACR。默认分支额外打 `:latest`，每次提交打 commit 短 sha 标签（仓库地址由 Actions 变量配置）。
 
 ### 仅构建不推送（写入 buildx 缓存）
 
