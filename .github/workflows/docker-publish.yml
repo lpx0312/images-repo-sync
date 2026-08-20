@@ -1,14 +1,14 @@
 name: Docker Build and Push
 
 # =============================================================================
-# 触发条件: 推送任意分支/tag 的 commit
+# 触发条件: workflow_dispatch 手动触发（Actions 页或 gh workflow run）
 # 构建产物: linux/amd64 + linux/arm64 多架构镜像
 # 推送目标: 阿里云容器镜像服务 (ACR)
-# 镜像标签: 默认分支 :latest; 每次提交 commit 短 sha; 分支名; v* tag 时额外打 semver
+# 镜像标签: 默认分支 :latest; commit 短 sha; 分支名; 若检出带 v* tag 则额外打 semver
 # =============================================================================
 
 on:
-  push:
+  workflow_dispatch:
 
 env:
   REGISTRY: ${{ vars.ALIYUN_REGISTRY }}
