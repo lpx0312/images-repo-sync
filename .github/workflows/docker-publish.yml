@@ -1,13 +1,14 @@
 name: Docker Build and Push
 
 # =============================================================================
-# 触发条件: workflow_dispatch 手动触发（Actions 页或 gh workflow run）
+# 触发条件: 推送任意分支/tag 的 commit, 也可在 Actions 页手动触发
 # 构建产物: linux/amd64 + linux/arm64 多架构镜像
 # 推送目标: 阿里云容器镜像服务 (ACR)
-# 镜像标签: 默认分支 :latest; commit 短 sha; 分支名; 若检出带 v* tag 则额外打 semver
+# 镜像标签: 默认分支 :latest; 每次提交 commit 短 sha; 分支名; v* tag 时额外打 semver
 # =============================================================================
 
 on:
+  push:
   workflow_dispatch:
 
 env:
@@ -85,6 +86,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # ACR 不接受 attestation 里的 application/vnd.oci.empty.v1+json
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
