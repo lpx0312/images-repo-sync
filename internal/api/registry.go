@@ -2,6 +2,7 @@ package api
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -31,21 +32,22 @@ type registryDTO struct {
 }
 
 // toModel 把 DTO 转成模型并加密密码。Password 为空时(更新场景)保留原密码。
+// Host 统一过 normalizeHost 清洗(去误填的 scheme 与首尾斜杠)。
 func (d *registryDTO) toModel(existing *model.Registry) (*model.Registry, error) {
 	m := &model.Registry{}
 	if existing != nil {
 		*m = *existing
 	}
-	m.Name = d.Name
-	m.Host = d.Host
+	m.Name = strings.TrimSpace(d.Name)
+	m.Host = normalizeHost(d.Host)
 	if d.Type != "" {
 		m.Type = d.Type
 	} else if m.Type == "" {
 		m.Type = model.RegistryTypeGeneric
 	}
-	m.Username = d.Username
+	m.Username = strings.TrimSpace(d.Username)
 	m.Insecure = d.Insecure
-	m.DefaultProject = d.DefaultProject
+	m.DefaultProject = strings.TrimSpace(d.DefaultProject)
 
 	// Password 为空:更新时保留旧密码;否则视为确实没填。
 	if d.Password != "" {
@@ -56,6 +58,15 @@ func (d *registryDTO) toModel(existing *model.Registry) (*model.Registry, error)
 		m.PasswordEnc = enc
 	}
 	return m, nil
+}
+
+// normalizeHost 清洗用户输入的仓库地址:去掉误填的 http(s):// 前缀与首尾空白/斜杠,
+// 避免拼出 "https://https://host" 之类的非法 URL。仓库一律走 HTTPS(见 registry 包)。
+func normalizeHost(h string) string {
+	h = strings.TrimSpace(h)
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	return strings.Trim(h, "/")
 }
 
 // registryVO 是返回给前端的视图,不含密码哈希。
@@ -111,6 +122,10 @@ func (h *RegistryHandler) Create(c *gin.Context) {
 		serverErr(c, "加密密码失败")
 		return
 	}
+	if m.Host == "" {
+		badReq(c, "仓库地址无效")
+		return
+	}
 	if err := h.DB.Create(m).Error; err != nil {
 		badReq(c, "创建失败,名称或地址可能重复")
 		return
@@ -134,6 +149,10 @@ func (h *RegistryHandler) Update(c *gin.Context) {
 	m, err := dto.toModel(&existing)
 	if err != nil {
 		serverErr(c, "加密密码失败")
+		return
+	}
+	if m.Host == "" {
+		badReq(c, "仓库地址无效")
 		return
 	}
 	if err := h.DB.Save(m).Error; err != nil {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -103,7 +104,7 @@ func seedDefaultAdmin(db *gorm.DB) error {
 	if err := db.Create(&admin).Error; err != nil {
 		return err
 	}
-	fmt.Printf("[store] 默认管理员账号已创建: %s (密码: %s)。请及时登录并修改默认密码!\n",
+	log.Printf("[store] 默认管理员账号已创建: %s (密码: %s)。请及时登录并修改默认密码!",
 		admin.Username, maskPassword(config.AppConfig.AdminPassword))
 	return nil
 }
@@ -131,6 +132,6 @@ func RecordLoginLog(userID uint, username, ip, ua, status, message string) {
 		CreatedAt: time.Now(),
 	}
 	if err := DB.Create(&entry).Error; err != nil {
-		fmt.Printf("[store] 写登录日志失败: %v\n", err)
+		log.Printf("[store] 写登录日志失败: %v", err)
 	}
 }

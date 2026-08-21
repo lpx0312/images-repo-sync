@@ -4,15 +4,12 @@ package registry
 
 import (
 	"context"
-	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // ProbeResult 是连接探测结果。
@@ -23,27 +20,11 @@ type ProbeResult struct {
 	Endpoint string `json:"endpoint,omitempty"` // 实际命中的探测端点
 }
 
-// httpClient 构造探测用的 HTTP client(insecure 时跳过 TLS 校验)。
-func httpClient(insecure bool) *http.Client {
-	t := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
-	}
-	return &http.Client{Timeout: 15 * time.Second, Transport: t}
-}
-
 // baseURL 返回形如 "https://host[:port]" 的根。
 // 注意:insecure(跳过 TLS 校验)只影响证书验证,不改变协议——registry 一律走 HTTPS。
 // 若 registry 真的是纯 HTTP(无 TLS),应直接在 host 里体现(极少见,这里不支持)。
-func baseURL(host string, insecure bool) string {
+func baseURL(host string) string {
 	return "https://" + host
-}
-
-// basicAuth 返回 "Basic base64(user:pass)"。user/pass 为空则返回空串。
-func basicAuth(user, pass string) string {
-	if user == "" && pass == "" {
-		return ""
-	}
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
 }
 
 // doGet 发 GET 请求,返回响应对象(调用方负责 Close body)。
@@ -102,8 +83,8 @@ func readErrBody(resp *http.Response) string {
 // 会改返回 `Basic` challenge 而非 `Bearer` challenge,导致无法拿到 token realm。
 // 凭证校验放在后续 token 端点或 Basic 重试步骤中。
 func Probe(ctx context.Context, host, user, pass string, insecure bool) ProbeResult {
-	client := httpClient(insecure)
-	root := baseURL(host, insecure)
+	client := HTTPClient(insecure)
+	root := baseURL(host)
 	pingURL := root + "/v2/"
 
 	// 第 1 步:不带认证打 /v2/,探测可达性并取回认证 challenge。
@@ -149,7 +130,7 @@ func probeAuth(ctx context.Context, client *http.Client, root, pingURL string, p
 
 // probeBasic 处理 Basic challenge:带 Basic Auth 重试 /v2/。
 func probeBasic(ctx context.Context, client *http.Client, pingURL, user, pass string) ProbeResult {
-	resp, err := doGet(ctx, client, pingURL, basicAuth(user, pass))
+	resp, err := doGet(ctx, client, pingURL, BasicAuthHeader(user, pass))
 	if err != nil {
 		return classifyNetErr(err, pingURL)
 	}
@@ -178,7 +159,7 @@ func probeBearer(ctx context.Context, client *http.Client, root, pingURL, authHe
 	if service != "" {
 		tokenURL += "?service=" + url.QueryEscape(service)
 	}
-	tokenResp, err := doGet(ctx, client, tokenURL, basicAuth(user, pass))
+	tokenResp, err := doGet(ctx, client, tokenURL, BasicAuthHeader(user, pass))
 	if err != nil {
 		return classifyNetErr(err, realm)
 	}
@@ -253,7 +234,7 @@ func classifyNetErr(err error, host string) ProbeResult {
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
-		return ProbeResult{OK: false, Message: "连接超时:仓库未在 15 秒内响应", Detail: err.Error()}
+		return ProbeResult{OK: false, Message: "连接超时:仓库未在 20 秒内响应", Detail: err.Error()}
 	case strings.Contains(msg, "no such host") || strings.Contains(msg, "lookup"):
 		return ProbeResult{OK: false, Message: fmt.Sprintf("无法解析主机 %s(地址错误或 DNS 故障)", host), Detail: err.Error()}
 	case strings.Contains(msg, "connection refused"):

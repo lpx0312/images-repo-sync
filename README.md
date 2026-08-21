@@ -105,13 +105,20 @@ make web-dev        # 或: cd web && npm install && npm run dev
 | `ADMIN_PASSWORD` | `admin123` | 首次启动创建的默认管理员密码。`make up` 开发默认值为 `Admin@123`；docker compose 使用 `.env`（`.env.example` 为 `Admin@ChangeMe`） |
 | `ENCRYPT_KEY` | （空=明文） | 仓库密码加密主密钥。**生产建议设置**，否则仓库密码明文存储 |
 | `SKOPEO_BIN` | `skopeo` | skopeo 可执行文件路径 |
+| `TASK_CONCURRENCY` | `1` | 任务并发 worker 数（不同任务之间并发；单任务内的镜像始终串行。上限 8） |
+| `TASK_RETENTION_DAYS` | `30` | 已结束任务（含明细）保留天数，超期自动清理；`0` = 永久保留 |
+| `LOGIN_LOG_RETENTION_DAYS` | `180` | 登录日志保留天数；`0` = 永久保留 |
 | `TZ` | `Asia/Shanghai` | 时区 |
+
+> 登录防暴力破解：同一用户名连续失败 5 次（同一 IP 连续失败 10 次）将锁定 10 分钟，期间拒绝登录。
 
 ## 数据持久化
 
 - 数据库文件：`/data/images-repo-sync.db`
 - 通过 volume 挂载（compose 中为 `./data:/data`）
 - 容器删除重建后，用户、仓库配置、任务历史全部保留
+- 服务重启时，上次运行中的任务会自动标记为失败（错误注明"服务重启,任务中断"），未执行的任务自动重新入队
+- 历史任务与登录日志按保留天数每天清理一次（见上表环境变量）
 
 ## 技术栈
 

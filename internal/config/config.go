@@ -6,18 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // Config 持有应用运行期配置。所有字段都来自环境变量,带合理默认值。
 type Config struct {
-	Port           string
-	DBPath         string
-	JWTSecret      string
-	AdminUsername  string
-	AdminPassword  string
-	EncryptKey     string
-	SkopeoBin      string
+	Port                  string
+	DBPath                string
+	JWTSecret             string
+	AdminUsername         string
+	AdminPassword         string
+	EncryptKey            string
+	SkopeoBin             string
+	TaskConcurrency       int // 任务并发 worker 数(默认 1 串行)
+	TaskRetentionDays     int // 已结束任务保留天数;0 = 永久保留
+	LoginLogRetentionDays int // 登录日志保留天数;0 = 永久保留
 }
 
 // AppConfig 是全局配置单例,在 main 中通过 Load() 初始化。
@@ -78,7 +82,33 @@ func Load() (*Config, error) {
 		c.SkopeoBin = v
 	}
 
+	c.TaskConcurrency = envInt("TASK_CONCURRENCY", 1)
+	if c.TaskConcurrency < 1 {
+		c.TaskConcurrency = 1
+	} else if c.TaskConcurrency > 8 {
+		c.TaskConcurrency = 8
+	}
+	c.TaskRetentionDays = envInt("TASK_RETENTION_DAYS", 30)
+	if c.TaskRetentionDays < 0 {
+		c.TaskRetentionDays = 0
+	}
+	c.LoginLogRetentionDays = envInt("LOGIN_LOG_RETENTION_DAYS", 180)
+	if c.LoginLogRetentionDays < 0 {
+		c.LoginLogRetentionDays = 0
+	}
+
 	return c, nil
+}
+
+// envInt 读取整型环境变量;未设置或非法时返回默认值。
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+		fmt.Printf("[config] 忽略无效的 %s 值,使用默认值 %d\n", name, def)
+	}
+	return def
 }
 
 // randomSecret 生成 32 字节随机十六进制字符串作为临时 JWT 密钥。

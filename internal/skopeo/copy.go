@@ -15,13 +15,13 @@ const (
 
 // CopyOptions 描述一次 skopeo copy 调用的全部参数。
 type CopyOptions struct {
-	SrcRef          string // 完整源引用,如 gcr.io/foo/bar:v1(不含 docker://)
-	SrcAuthFile     string // 源 auth.json 路径(可空)
-	SrcInsecure     bool   // 源跳过 TLS 校验
+	SrcRef      string // 完整源引用,如 gcr.io/foo/bar:v1(不含 docker://)
+	SrcAuthFile string // 源 auth.json 路径(可空)
+	SrcInsecure bool   // 源跳过 TLS 校验
 
-	DstRef          string // 完整目标引用
-	DstAuthFile     string // 目标 auth.json 路径(可空)
-	DstInsecure     bool   // 目标跳过 TLS 校验
+	DstRef      string // 完整目标引用
+	DstAuthFile string // 目标 auth.json 路径(可空)
+	DstInsecure bool   // 目标跳过 TLS 校验
 
 	PreserveDigests bool   // 是否保留 digest(--preserve-digests)
 	Arch            string // 目标架构: amd64 / arm64 / all;空按 amd64 处理
@@ -29,7 +29,7 @@ type CopyOptions struct {
 
 // CopyResult 描述一次 copy 的结果。StderrTail 仅在失败时填充,便于排查。
 type CopyResult struct {
-	OK        bool
+	OK         bool
 	StderrTail string
 }
 
@@ -38,13 +38,36 @@ type CopyResult struct {
 // 架构选择(Arch 字段)对应两种互斥的 skopeo 调用方式:
 //   - ArchAll          → skopeo copy --all ...            (复制完整 manifest list)
 //   - ArchAMD64/ARM64  → skopeo --override-arch=<arch> --override-os=linux copy ...
-//                        (仅复制指定架构,目标成为单架构镜像)
+//     (仅复制指定架构,目标成为单架构镜像)
 //
 // 注意:--override-arch 是 skopeo 的全局 flag,必须放在 copy 子命令之前;
 // 它与 --all 互斥,不能同时使用。
 func Copy(ctx context.Context, opt CopyOptions, handler LineHandler) CopyResult {
-	// globalArgs 放 skopeo 的全局 flag(如 --override-arch),copyArgs 放 copy 子命令参数。
-	// 注意 flag 顺序:全局 flag 在 "copy" 之前,copy 的 flag(--all/--preserve-digests 等)在 "copy" 之后。
+	args := buildCopyArgs(opt)
+
+	// 保留 stderr 末尾若干行用于错误定位。
+	const tailLines = 6
+	tail := newRingBuffer(tailLines)
+	err := runWithStream(ctx, args, func(line string) {
+		tail.push(line)
+		if handler != nil {
+			handler(line)
+		}
+	})
+	if err == nil {
+		return CopyResult{OK: true}
+	}
+	detail := err.Error()
+	if t := tail.join("\n"); t != "" {
+		detail = t
+	}
+	return CopyResult{OK: false, StderrTail: detail}
+}
+
+// buildCopyArgs 按选项拼装 skopeo 命令行参数。
+// globalArgs 放 skopeo 的全局 flag(如 --override-arch),copyArgs 放 copy 子命令参数;
+// 全局 flag 必须在 "copy" 之前,copy 的 flag(--all/--preserve-digests 等)在 "copy" 之后。
+func buildCopyArgs(opt CopyOptions) []string {
 	var globalArgs, copyArgs []string
 	copyArgs = append(copyArgs, "copy") // 子命令必须先入队
 
@@ -80,25 +103,7 @@ func Copy(ctx context.Context, opt CopyOptions, handler LineHandler) CopyResult 
 	}
 	copyArgs = append(copyArgs, "docker://"+opt.SrcRef, "docker://"+opt.DstRef)
 
-	args := append(globalArgs, copyArgs...)
-
-	// 保留 stderr 末尾若干行用于错误定位。
-	const tailLines = 6
-	tail := newRingBuffer(tailLines)
-	err := runWithStream(ctx, args, func(line string) {
-		tail.push(line)
-		if handler != nil {
-			handler(line)
-		}
-	})
-	if err == nil {
-		return CopyResult{OK: true}
-	}
-	detail := err.Error()
-	if t := tail.join("\n"); t != "" {
-		detail = t
-	}
-	return CopyResult{OK: false, StderrTail: detail}
+	return append(globalArgs, copyArgs...)
 }
 
 // IsPreserveDigestsConflict 判断 copy 失败输出是否属于「--preserve-digests 与目标格式不兼容」:
@@ -157,59 +162,28 @@ func (r *ringBuffer) join(sep string) string {
 }
 
 // InspectDigest 用 skopeo inspect 取镜像 digest(用于成功后记录目标 digest)。
-func InspectDigest(ctx context.Context, ref, host, user, pass string, insecure bool) (string, error) {
-	authPath, err := WriteAuthFile(host, user, pass)
-	if err != nil {
-		return "", err
-	}
-	defer CleanupAuthFiles(authPath)
-
-	args := []string{"inspect", "--authfile", authPath, "docker://" + ref}
+// authFile 复用调用方已生成的目标仓库 auth 文件,避免每条镜像重复落盘凭证。
+func InspectDigest(ctx context.Context, ref, authFile string, insecure bool) (string, error) {
+	args := []string{"inspect", "--format", "{{.Digest}}"}
 	if insecure {
-		args = []string{"inspect", "--tls-verify=false", "--authfile", authPath, "docker://" + ref}
+		args = append(args, "--tls-verify=false")
 	}
+	if authFile != "" {
+		args = append(args, "--authfile", authFile)
+	}
+	args = append(args, "docker://"+ref)
 
-	// 逐行扫描,命中 Digest 即提取。skopeo inspect 的 Digest 不在最后一行
-	// (人类格式在第 3 行附近,JSON 格式后面还有 RepoTags/Layers 等多行),不能只留末行。
+	// --format 输出单行 digest;取最后一个非空行兜底(skopeo 偶发告警行)。
 	var digest string
-	scan := func(line string) {
-		if digest != "" {
-			return
+	if err := runWithStream(ctx, args, func(line string) {
+		if s := strings.TrimSpace(line); s != "" {
+			digest = s
 		}
-		for _, prefix := range []string{"Digest: ", "\"Digest\": \""} {
-			if i := indexOf(line, prefix); i >= 0 {
-				rest := line[i+len(prefix):]
-				end := indexOfAny(rest, " \t\r\n\",")
-				if end < 0 {
-					end = len(rest)
-				}
-				digest = rest[:end]
-				return
-			}
-		}
-	}
-	if err := runWithStream(ctx, args, scan); err != nil {
+	}); err != nil {
 		return "", fmt.Errorf("inspect 失败: %w", err)
 	}
+	if digest == "" {
+		return "", fmt.Errorf("inspect 未返回 digest")
+	}
 	return digest, nil
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func indexOfAny(s, any string) int {
-	for i := 0; i < len(s); i++ {
-		for j := 0; j < len(any); j++ {
-			if s[i] == any[j] {
-				return i
-			}
-		}
-	}
-	return -1
 }

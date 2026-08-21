@@ -1,8 +1,6 @@
 package api
 
 import (
-	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,6 +15,7 @@ import (
 	"images-repo-sync/internal/crypto"
 	"images-repo-sync/internal/middleware"
 	"images-repo-sync/internal/model"
+	"images-repo-sync/internal/registry"
 	"images-repo-sync/internal/skopeo"
 )
 
@@ -157,27 +155,15 @@ func (h *CatalogHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.GET("/:id/projects", h.Projects)
 }
 
-// registryURL 拼出完整的 HTTPS URL。insecure(跳过 TLS 校验)不改变协议,
-// registry 一律走 HTTPS;真正的跳过证书校验在调用方用自定义 Transport 实现。
-func registryURL(host string, insecure bool, path string) string {
+// registryURL 拼出完整的 HTTPS URL。registry 一律走 HTTPS;
+// 跳过证书校验(自签证书)在 doRequest 里通过共享的 insecure client 实现。
+func registryURL(host, path string) string {
 	return fmt.Sprintf("https://%s%s", host, path)
 }
 
-// insecureClient 是跳过 TLS 证书校验的 HTTP client(复用连接池)。
-var insecureClient = &http.Client{
-	Timeout: 20 * time.Second,
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	},
-}
-
-// doRequest 发请求,返回响应体。insecure 为 true 时跳过 TLS 证书校验(自签证书)。
+// doRequest 发请求,返回响应体。insecure 为 true 时使用跳过 TLS 校验的共享 client。
 func doRequest(req *http.Request, insecure bool) ([]byte, int, error) {
-	c := http.DefaultClient
-	if insecure {
-		c = insecureClient
-	}
-	resp, err := c.Do(req)
+	resp, err := registry.HTTPClient(insecure).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -186,22 +172,14 @@ func doRequest(req *http.Request, insecure bool) ([]byte, int, error) {
 	return body, resp.StatusCode, err
 }
 
-// basicAuthHeader 生成 Basic 认证头。
-func basicAuthHeader(user, pass string) string {
-	if user == "" && pass == "" {
-		return ""
-	}
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
-}
-
 // registryCatalog 调 registry v2 /v2/_catalog。
 func registryCatalog(req *http.Request, host, user, pass string, insecure bool) ([]string, error) {
-	u := registryURL(host, insecure, "/v2/_catalog")
+	u := registryURL(host, "/v2/_catalog")
 	r, err := http.NewRequestWithContext(req.Context(), http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	if h := basicAuthHeader(user, pass); h != "" {
+	if h := registry.BasicAuthHeader(user, pass); h != "" {
 		r.Header.Set("Authorization", h)
 	}
 	body, code, err := doRequest(r, insecure)
@@ -265,12 +243,12 @@ func harborListRaw(req *http.Request, host, user, pass string, insecure bool, pa
 	if strings.Contains(path, "page_size=") && !strings.Contains(path, "page=") {
 		path += "&page=1"
 	}
-	u := registryURL(host, insecure, path)
+	u := registryURL(host, path)
 	r, err := http.NewRequestWithContext(req.Context(), http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	if h := basicAuthHeader(user, pass); h != "" {
+	if h := registry.BasicAuthHeader(user, pass); h != "" {
 		r.Header.Set("Authorization", h)
 	}
 	// Harbor v2 必须带 Accept: application/json,否则可能 422。

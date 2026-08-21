@@ -13,8 +13,8 @@ import (
 	"images-repo-sync/internal/store"
 )
 
-// worker 串行消费任务队列并执行。
-// SQLite 写串行 + skopeo 受 IO 限制,串行执行更稳定;后续可改并发池。
+// worker 消费任务队列并执行(实例数由 TASK_CONCURRENCY 决定,默认 1)。
+// skopeo 受 IO 限制,少量并发即可;单个任务内的镜像始终串行复制。
 func (m *Manager) worker() {
 	for taskID := range m.queue {
 		if err := m.runTask(taskID); err != nil {
@@ -173,7 +173,7 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		// generic),按报错特征识别后去掉 --preserve-digests 转换格式重试一次,避免整条失败。
 		if !res.OK && ctx.Err() == nil && copyOpt.PreserveDigests && skopeo.IsPreserveDigestsConflict(res.StderrTail) {
 			m.emit(taskID, EventItemProgress, Event{
-				ItemID: it.ID,
+				ItemID:  it.ID,
 				Message: "目标仓库拒绝当前 manifest 格式,关闭 digest 严格保留并转换格式后重试...",
 			})
 			copyOpt.PreserveDigests = false
@@ -184,8 +184,8 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 		if res.OK {
 			succeeded++
 			digest := ""
-			// 取目标 digest(失败不影响主流程)。
-			if d, err := skopeo.InspectDigest(ctx, it.TargetRef, dstCreds.Host, dstCreds.User, dstCreds.Pass, dstCreds.Insecure); err == nil {
+			// 取目标 digest(失败不影响主流程),复用任务的目标 auth 文件。
+			if d, err := skopeo.InspectDigest(ctx, it.TargetRef, dstAuth, dstCreds.Insecure); err == nil {
 				digest = d
 			}
 			updateItem(db, it.ID, map[string]any{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,9 @@ type createTaskRequest struct {
 	Refs             []string `json:"refs" binding:"required"`
 }
 
+// maxRefsPerTask 限制单任务镜像条数,防止误粘贴超大清单把任务明细撑爆。
+const maxRefsPerTask = 500
+
 // Create POST /api/tasks
 //
 // 校验源/目标仓库存在 → 按模式解析每条 ref → 落库任务和明细 → 入队执行。
@@ -44,6 +48,10 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 	if len(req.Refs) == 0 {
 		badReq(c, "镜像列表不能为空")
+		return
+	}
+	if len(req.Refs) > maxRefsPerTask {
+		badReq(c, fmt.Sprintf("单次任务最多 %d 条镜像,请分批提交", maxRefsPerTask))
 		return
 	}
 
@@ -86,7 +94,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	items := make([]parsedItem, 0, len(req.Refs))
 	seen := make(map[string]bool, len(req.Refs))
 	for _, ref := range req.Refs {
-		ref = trimSpaces(ref)
+		ref = strings.TrimSpace(ref)
 		if ref == "" {
 			continue
 		}
@@ -203,10 +211,16 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 
 // Stream GET /api/tasks/:id/stream —— SSE 实时事件流。
 //
-// 建立连接后,先补发当前任务快照与已有 items 状态(避免漏掉已发生的事件),
-// 然后订阅 manager 实时事件并转发。客户端断开时自动清理订阅。
+// 先订阅再查库:若任务恰好在「查快照」与「订阅」两步之间结束,结束事件已广播完,
+// 后订阅的客户端将永远收不到 task_finished;先订阅则该窗口内的事件进缓冲,
+// 快照也会反映终态,两条路径都能正确收尾。客户端断开时自动清理订阅。
 func (h *TaskHandler) Stream(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+
+	// 1. 先订阅,消除与任务结束广播之间的竞态。
+	subID, ch := task.Instance().Subscribe(uint(id))
+	defer task.Instance().Unsubscribe(uint(id), subID)
+
 	var t model.SyncTask
 	// Preload 用函数形式加 Order,避免字符串条件被误当 WHERE 拼成非法 SQL。
 	if err := h.DB.Preload("Items", func(tx *gorm.DB) *gorm.DB {
@@ -273,10 +287,7 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 		return
 	}
 
-	// 2. 订阅实时事件。
-	subID, ch := task.Instance().Subscribe(uint(id))
-	defer task.Instance().Unsubscribe(uint(id), subID)
-
+	// 2. 转发实时事件直到任务结束。
 	// 心跳与事件共用同一 select,避免 goroutine 并发写 c.Writer 导致 SSE 帧损坏。
 	// (Gin ResponseWriter 非并发安全,两个 goroutine 交错 Fprintf 会让客户端 JSON 解析失败。)
 	ticker := time.NewTicker(15 * time.Second)
@@ -308,21 +319,21 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 // buildTaskVO 构造返回前端的任务视图。
 func (h *TaskHandler) buildTaskVO(t *model.SyncTask, withItems bool) gin.H {
 	vo := gin.H{
-		"id":                t.ID,
+		"id":                 t.ID,
 		"source_registry_id": t.SourceRegistryID,
 		"target_registry_id": t.TargetRegistryID,
-		"mode":              t.Mode,
-		"target_project":    t.TargetProject,
-		"arch":              t.Arch,
-		"total":             t.Total,
-		"succeeded":         t.Succeeded,
-		"failed":            t.Failed,
-		"skipped":           t.Skipped,
-		"status":            t.Status,
-		"error":             t.Error,
-		"created_at":        t.CreatedAt,
-		"started_at":        t.StartedAt,
-		"finished_at":       t.FinishedAt,
+		"mode":               t.Mode,
+		"target_project":     t.TargetProject,
+		"arch":               t.Arch,
+		"total":              t.Total,
+		"succeeded":          t.Succeeded,
+		"failed":             t.Failed,
+		"skipped":            t.Skipped,
+		"status":             t.Status,
+		"error":              t.Error,
+		"created_at":         t.CreatedAt,
+		"started_at":         t.StartedAt,
+		"finished_at":        t.FinishedAt,
 	}
 	if withItems {
 		if len(t.Items) == 0 && t.ID > 0 {
@@ -358,17 +369,6 @@ func (h *TaskHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.GET("/:id", h.Get)
 	g.POST("/:id/cancel", h.Cancel)
 	g.GET("/:id/stream", h.Stream)
-}
-
-// trimSpaces 去除首尾空白与可能的换行。
-func trimSpaces(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n') {
-		s = s[1:]
-	}
-	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t' || s[len(s)-1] == '\r' || s[len(s)-1] == '\n') {
-		s = s[:len(s)-1]
-	}
-	return s
 }
 
 // nowPtr 返回指向当前时间的指针(用于可空时间字段)。

@@ -15,6 +15,10 @@ services:
       ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
       # 首次启动后请立即登录修改默认密码。
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-Admin@ChangeMe}"
+      # 任务并发与数据保留(可选,默认 1 / 30 / 180)
+      TASK_CONCURRENCY: "${TASK_CONCURRENCY:-1}"
+      TASK_RETENTION_DAYS: "${TASK_RETENTION_DAYS:-30}"
+      LOGIN_LOG_RETENTION_DAYS: "${LOGIN_LOG_RETENTION_DAYS:-180}"
       TZ: "${TZ:-Asia/Shanghai}"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/healthz"]

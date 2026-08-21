@@ -1,7 +1,9 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,7 +32,8 @@ type loginRequest struct {
 // Login POST /api/auth/login
 //
 // 校验账号密码 → 签发 JWT → 写登录日志。无论用户不存在还是密码错,
-// 都返回统一的「用户名或密码错误」以避免用户名枚举。
+// 都返回统一的「用户名或密码错误」以避免用户名枚举;用户不存在时也跑一次
+// 等耗时的 bcrypt 比较,消除时序侧信道。连续失败会触发临时锁定(见 login_limiter.go)。
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,8 +43,23 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	ip := c.ClientIP()
 	ua := c.GetHeader("User-Agent")
 
+	// 失败限速:同一用户名或 IP 连续失败过多时临时拒绝。
+	userKey := "user:" + strings.ToLower(strings.TrimSpace(req.Username))
+	ipKey := "ip:" + ip
+	if locked, wait := loginGuard.locked(userKey, ipKey); locked {
+		store.RecordLoginLog(0, req.Username, ip, ua, model.LoginStatusFailed, "失败次数过多,临时锁定")
+		mins := int(wait.Minutes())
+		if mins < 1 {
+			mins = 1
+		}
+		errResp(c, http.StatusTooManyRequests, fmt.Sprintf("登录失败次数过多,请约 %d 分钟后再试", mins))
+		return
+	}
+
 	var user model.User
 	if err := h.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		auth.CheckPassword(loginDummyHash, req.Password) // 等耗时比较,拉平与密码错误分支的时序
+		loginGuard.recordFailure(userKey, ipKey)
 		store.RecordLoginLog(0, req.Username, ip, ua, model.LoginStatusFailed, "用户不存在")
 		errResp(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
@@ -52,10 +70,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	if !auth.CheckPassword(user.PasswordHash, req.Password) {
+		loginGuard.recordFailure(userKey, ipKey)
 		store.RecordLoginLog(user.ID, req.Username, ip, ua, model.LoginStatusFailed, "密码错误")
 		errResp(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
+	loginGuard.reset(userKey, ipKey)
 
 	token, expiresAt, err := auth.GenerateToken(user.ID, user.Username, req.RememberMe)
 	if err != nil {

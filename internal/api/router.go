@@ -56,10 +56,17 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 	}
 
 	if staticFS != nil {
-		// /assets/* 直出静态资源(带 hash 文件名,可长期缓存)。
-		assetsFS, err := fs.Sub(staticFS, "assets")
-		if err == nil {
-			r.StaticFS("/assets", http.FS(assetsFS))
+		// /assets/* 直出静态资源。文件名带内容 hash,内容变即换名,
+		// 可放心让浏览器长期缓存(embed 文件无 ModTime,不设置的话连 304 协商都做不了)。
+		if _, err := fs.Stat(staticFS, "assets"); err == nil {
+			assetsFS, err := fs.Sub(staticFS, "assets")
+			if err == nil {
+				fileServer := http.StripPrefix("/assets", http.FileServer(http.FS(assetsFS)))
+				r.GET("/assets/*filepath", func(c *gin.Context) {
+					c.Header("Cache-Control", "public, max-age=31536000, immutable")
+					fileServer.ServeHTTP(c.Writer, c.Request)
+				})
+			}
 		}
 		// 其余非 /api 路径回退到 index.html,交给前端路由。
 		r.NoRoute(func(c *gin.Context) {
@@ -81,7 +88,9 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 			if f, err := staticFS.Open("index.html"); err == nil {
 				defer f.Close()
 				c.Status(http.StatusOK)
+				// 入口页禁止长缓存,保证发版后用户能立即拿到新版本的资源引用。
 				c.Header("Content-Type", "text/html; charset=utf-8")
+				c.Header("Cache-Control", "no-cache")
 				_, _ = io.Copy(c.Writer, f)
 				return
 			}

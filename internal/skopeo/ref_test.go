@@ -8,9 +8,9 @@ import (
 
 func TestParseSource(t *testing.T) {
 	cases := []struct {
-		in        string
-		wantHost  string
-		wantPath  string
+		in       string
+		wantHost string
+		wantPath string
 	}{
 		{"nginx:1.25", "docker.io", "library/nginx:1.25"},
 		{"nginx", "docker.io", "library/nginx:latest"},

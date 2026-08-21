@@ -28,9 +28,9 @@ const (
 
 // 同步模式常量。
 const (
-	ModeFlat         = "flat"         // 进配置 project,只保留镜像名+tag
+	ModeFlat         = "flat"          // 进配置 project,只保留镜像名+tag
 	ModePreservePath = "preserve_path" // 进配置 project,源 host 后完整路径原样保留
-	ModeReplaceHost  = "replace_host" // 不加 project 前缀,只换 host
+	ModeReplaceHost  = "replace_host"  // 不加 project 前缀,只换 host
 )
 
 // 仓库类型常量。
@@ -81,22 +81,22 @@ func (Registry) TableName() string { return "registries" }
 
 // SyncTask 是一次同步任务。
 type SyncTask struct {
-	ID               uint       `json:"id" gorm:"primaryKey"`
-	SourceRegistryID uint       `json:"source_registry_id" gorm:"not null;index"`
-	TargetRegistryID uint       `json:"target_registry_id" gorm:"not null;index"`
-	Mode             string     `json:"mode" gorm:"type:varchar(20);not null"`
-	TargetProject    string     `json:"target_project" gorm:"type:varchar(255)"`
-	Arch             string     `json:"arch" gorm:"type:varchar(10);default:'amd64'"` // amd64 / arm64 / all
-	Total            int        `json:"total" gorm:"default:0"`
-	Succeeded        int        `json:"succeeded" gorm:"default:0"`
-	Failed           int        `json:"failed" gorm:"default:0"`
-	Skipped          int        `json:"skipped" gorm:"default:0"`
-	Status           string     `json:"status" gorm:"type:varchar(20);default:'pending';index"`
-	Error            string     `json:"error" gorm:"type:text"`
-	CreatedBy        uint       `json:"created_by" gorm:"default:0"`
-	CreatedAt        time.Time  `json:"created_at"`
-	StartedAt        *time.Time `json:"started_at"`
-	FinishedAt       *time.Time `json:"finished_at"`
+	ID               uint           `json:"id" gorm:"primaryKey"`
+	SourceRegistryID uint           `json:"source_registry_id" gorm:"not null;index"`
+	TargetRegistryID uint           `json:"target_registry_id" gorm:"not null;index"`
+	Mode             string         `json:"mode" gorm:"type:varchar(20);not null"`
+	TargetProject    string         `json:"target_project" gorm:"type:varchar(255)"`
+	Arch             string         `json:"arch" gorm:"type:varchar(10);default:'amd64'"` // amd64 / arm64 / all
+	Total            int            `json:"total" gorm:"default:0"`
+	Succeeded        int            `json:"succeeded" gorm:"default:0"`
+	Failed           int            `json:"failed" gorm:"default:0"`
+	Skipped          int            `json:"skipped" gorm:"default:0"`
+	Status           string         `json:"status" gorm:"type:varchar(20);default:'pending';index"`
+	Error            string         `json:"error" gorm:"type:text"`
+	CreatedBy        uint           `json:"created_by" gorm:"default:0"`
+	CreatedAt        time.Time      `json:"created_at"`
+	StartedAt        *time.Time     `json:"started_at"`
+	FinishedAt       *time.Time     `json:"finished_at"`
 	Items            []SyncTaskItem `json:"items" gorm:"foreignKey:TaskID"`
 }
 

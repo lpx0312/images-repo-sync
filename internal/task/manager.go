@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"images-repo-sync/internal/config"
 )
 
 // EventType 是 SSE 推送的事件类型。
@@ -21,20 +23,21 @@ const (
 
 // Event 是推送给 SSE 订阅者的事件。
 type Event struct {
-	Type      EventType   `json:"type"`
-	TaskID    uint        `json:"task_id"`
-	ItemID    uint        `json:"item_id,omitempty"`
-	SourceRef string      `json:"source_ref,omitempty"`
-	TargetRef string      `json:"target_ref,omitempty"`
-	Message   string      `json:"message,omitempty"`
-	Data      any         `json:"data,omitempty"`
-	Time      time.Time   `json:"time"`
+	Type      EventType `json:"type"`
+	TaskID    uint      `json:"task_id"`
+	ItemID    uint      `json:"item_id,omitempty"`
+	SourceRef string    `json:"source_ref,omitempty"`
+	TargetRef string    `json:"target_ref,omitempty"`
+	Message   string    `json:"message,omitempty"`
+	Data      any       `json:"data,omitempty"`
+	Time      time.Time `json:"time"`
 }
 
 // Manager 负责任务的入队执行与 SSE 广播。
 //
 // 设计:
-//   - tasks 队列是带缓冲 channel,worker goroutine 串行消费(SQLite 写串行,且 skopeo 并发受 IO 限制)。
+//   - tasks 队列是带缓冲 channel,若干 worker goroutine 消费(数量由 TASK_CONCURRENCY 配置,
+//     默认 1 串行;skopeo 受 IO 限制,并发过大收益有限)。
 //   - subscribers 按 taskID 维护一组 channel,任务执行时向所有订阅者广播 Event。
 //   - 取消通过 cancel context 实现:Manager 记录每个运行中任务的 cancel func。
 type Manager struct {
@@ -59,7 +62,11 @@ func Instance() *Manager {
 			subs:        make(map[uint]map[uint]chan Event),
 			cancelFuncs: make(map[uint]context.CancelFunc),
 		}
-		go instance.worker()
+		// worker 数由 TASK_CONCURRENCY 控制(默认 1 串行,上限 8)。
+		// 单个任务内的镜像仍串行复制;并发只作用于不同任务之间。
+		for i := 0; i < config.AppConfig.TaskConcurrency; i++ {
+			go instance.worker()
+		}
 	})
 	return instance
 }
