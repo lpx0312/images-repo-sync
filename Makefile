@@ -276,6 +276,16 @@ web-build: ## 构建前端到 web/dist
 	@echo "$(BLUE)▶ 构建前端...$(RESET)"
 	@cd web && npm ci && npm run build
 
+# CLI 客户端(irs):输出到 bin/,按当前平台命名(irs / irs.exe)。
+IRS_BIN := bin/irs$(shell go env GOEXE)
+
+.PHONY: cli
+cli: ## 编译 irs 命令行客户端到 bin/
+	@echo "$(BLUE)▶ 编译 CLI → $(IRS_BIN)...$(RESET)"
+	@mkdir -p bin
+	@go build -o $(IRS_BIN) ./cmd/irs
+	@echo "$(GREEN)✅ 完成: $(IRS_BIN)(放入 PATH 即可全局使用,文档见 docs/cli.md)$(RESET)"
+
 .PHONY: tidy
 tidy: ## go mod tidy
 	@go mod tidy

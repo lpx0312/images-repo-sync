@@ -9,6 +9,8 @@
 - 🔐 **登录鉴权**：JWT + bcrypt，首次启动自动创建默认 admin 账号，支持修改密码、记住登录、30 分钟无操作自动登出。
 - 🗄️ **仓库管理**：配置多个源/目标仓库（Harbor / Docker Hub / ACR / 华为云 SWR / 通用 Registry），含地址、账号密码、TLS、默认 project；密码 AES-GCM 加密存储。
 - 📦 **Chart 仓库与上传**：配置多个 Chart 仓库（OCI / ChartMuseum），支持浏览器选择本地 `.tgz` 或填写服务器路径批量上传；上传自动解析 `Chart.yaml`，OCI 推送产物与 `helm push` 完全一致（可用 `helm pull` 拉回）；每次上传（成功/失败）均有记录，失败可重试。
+- 🖥️ **CLI 工具（irs）**：全部平台能力（登录、仓库、同步任务、chart 上传、设置）均可命令行操作，支持 `--json` 输出与语义化退出码，适合脚本与 CI（见 [docs/cli.md](docs/cli.md)）。
+- 🤖 **AI Skill（irs-sync）**：为 AI 助手（ZCode 等）提供的技能，通过 `irs` CLI 自动化完成镜像同步与 chart 上传，内置「写操作仅限 Harbor `datacenter-test-chart` 项目」的安全约束。
 - 🔀 **三种同步模式**：单一项目（扁平）、保持源项目路径、仅替换仓库地址（见下文）。
 - 🏗️ **目标架构**：新建任务可选仅 AMD64 / 仅 ARM64 / 所有架构（默认 AMD64，可在系统设置中修改默认值）。单架构使用 `skopeo --override-arch`；所有架构使用 `skopeo copy --all`。
 - 📋 **镜像来源**：支持「粘贴列表」和「浏览目录」（列出 repo/tag 勾选）两种方式。
@@ -74,6 +76,9 @@ make run-dev        # 或: DB_PATH=./data/test.db go run .
 # 前端(终端2)
 make web-dev        # 或: cd web && npm install && npm run dev
 # 前端 dev server 在 :3000，自动代理 /api 到 :8080
+
+# CLI 客户端
+make cli            # 编译 irs 到 bin/，见 docs/cli.md
 ```
 
 ## 三种同步模式
@@ -108,6 +113,30 @@ make web-dev        # 或: cd web && npm install && npm run dev
 - **服务器路径**：填写容器内文件或目录（目录扫描第一层 `*.tgz`，不递归），适合批量；测试时可将宿主机 chart 目录 `-v` 挂载进容器。
 
 上传时自动解析包内 `Chart.yaml`（非法包会跳过并给出原因），后台逐个推送；上传记录含状态、digest、错误明细，失败可一键重试，按 `TASK_RETENTION_DAYS` 一同清理。OCI 推送由后端纯 Go 实现（Registry v2 blob 上传 + manifest），镜像内无需安装 helm。
+
+## CLI 工具（irs）与 AI Skill
+
+平台附带命令行客户端 `irs`，与 Web 端共用同一套 REST API，全部能力均可脚本化：
+
+```bash
+make cli          # 编译到 bin/irs(或 bin/irs.exe)
+
+irs login --server http://localhost:8080 --username admin --password '***'
+irs chart-repos list
+irs charts upload 1 ./mychart-0.1.0.tgz          # 上传 chart(目录会扫一层 *.tgz),默认等待结果
+irs tasks create --source 2 --target 1 --mode flat --project datacenter-test-chart \
+  --arch amd64 --refs nginx:1.25 --wait          # 创建同步任务并实时跟踪
+irs charts uploads --status failed               # 上传记录;任意命令可加 --json
+```
+
+特性：登录态保存于 `~/.irs-cli.json`（支持 token 直填与账号密码，`IRS_USER`/`IRS_PASSWORD`
+环境下 token 过期自动重登）；`--json` 结构化输出 + 退出码（0 成功 / 1 业务失败 / 2 参数错误），
+适合 CI 与 AI 自动化。完整命令参考见 **[docs/cli.md](docs/cli.md)**。
+
+**AI Skill**：`irs-sync` 技能教会 AI 助手使用该 CLI 完成同步与 chart 上传，并强制遵守
+安全约束——**写操作仅允许落在 Harbor 的 `datacenter-test-chart` 项目，禁止触碰其他项目**。
+技能源文件在仓库 [skills/irs-sync/SKILL.md](skills/irs-sync/SKILL.md)，安装方式：复制到
+用户技能目录（ZCode 为 `~/.zcode/skills/irs-sync/`）后即可被 AI 自动触发。
 
 ## 环境变量
 
@@ -196,7 +225,9 @@ docker pull --platform linux/arm64 registry.cn-hangzhou.aliyuncs.com/lpx03/image
 ```
 images-repo-sync/
 ├── main.go                       # 入口,embed 前端
+├── cmd/irs/                      # irs CLI 客户端入口(见 docs/cli.md)
 ├── internal/
+│   ├── cli/                      # CLI 实现:client/config/render + 各命令组
 │   ├── config/   config.go       # 环境变量配置
 │   ├── model/    model.go        # GORM 模型
 │   ├── store/    store.go        # SQLite 初始化 + seed admin
@@ -215,6 +246,8 @@ images-repo-sync/
 │       ├── utils/  ref.js, constants.js
 │       ├── api/  router/
 │       ├── App.vue, views/, components/
+├── docs/cli.md                   # irs CLI 使用文档
+├── skills/irs-sync/SKILL.md      # AI Skill(复制到 ~/.zcode/skills/ 使用)
 ├── .github/workflows/docker-publish.yml
 ├── Dockerfile, docker-compose.yml
 └── README.md
