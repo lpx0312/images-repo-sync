@@ -122,7 +122,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { ArrowDown, Key, SwitchButton, Box, Files, Setting, Plus, Menu } from '@element-plus/icons-vue'
+import { ArrowDown, Key, SwitchButton, Box, Files, Setting, Plus, Menu, Collection, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 
@@ -136,7 +136,9 @@ const showLayout = computed(() => route.name !== 'Login' && authStore.isLoggedIn
 
 const navItems = [
   { path: '/tasks', label: '同步任务', icon: Box },
+  { path: '/chart-upload', label: 'Chart 上传', icon: UploadFilled },
   { path: '/registries', label: '仓库管理', icon: Files },
+  { path: '/chart-repos', label: 'Chart 仓库', icon: Collection },
   { path: '/settings', label: '系统设置', icon: Setting },
 ]
 

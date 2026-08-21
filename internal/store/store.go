@@ -50,6 +50,8 @@ func Init() error {
 		&model.SyncTaskItem{},
 		&model.LoginLog{},
 		&model.SystemSetting{},
+		&model.ChartRepo{},
+		&model.ChartUpload{},
 	); err != nil {
 		return fmt.Errorf("自动迁移失败: %w", err)
 	}
@@ -115,6 +117,25 @@ func maskPassword(p string) string {
 		return strings.Repeat("*", len(p))
 	}
 	return string(p[0]) + strings.Repeat("*", len(p)-2) + string(p[len(p)-1])
+}
+
+// RecoverChartUploads 服务启动时恢复上次异常中断的 chart 上传:
+// running/pending 一律置为失败并注明原因(上传源可能是容器重启后已消失的临时文件,
+// 与同步任务不同,无法可靠地重新入队,直接提示用户重新上传)。
+func RecoverChartUploads() {
+	if DB == nil {
+		return
+	}
+	res := DB.Model(&model.ChartUpload{}).
+		Where("status IN ?", []string{model.TaskStatusPending, model.TaskStatusRunning}).
+		Updates(map[string]any{
+			"status":      model.TaskStatusFailed,
+			"error":       "服务重启,上传中断,请重新上传",
+			"finished_at": time.Now(),
+		})
+	if res.RowsAffected > 0 {
+		log.Printf("[store] 已把 %d 条中断的 chart 上传记录标记为失败", res.RowsAffected)
+	}
 }
 
 // RecordLoginLog 写一条登录审计日志。失败仅打印,不影响登录主流程。

@@ -42,6 +42,12 @@ const (
 	RegistryTypeSWR       = "swr"       // 华为云 SWR:拒收顶层 OCI image index,作目标时需允许格式转换
 )
 
+// Chart 仓库类型常量。
+const (
+	ChartRepoTypeOCI         = "oci"         // OCI 兼容 registry(Harbor 等),chart 作为 OCI artifact 推送
+	ChartRepoTypeChartMuseum = "chartmuseum" // ChartMuseum,走 POST /api/charts
+)
+
 // 登录日志状态常量。
 const (
 	LoginStatusSuccess = "success"
@@ -117,6 +123,49 @@ type SyncTaskItem struct {
 }
 
 func (SyncTaskItem) TableName() string { return "sync_task_items" }
+
+// ChartRepo 是 chart 仓库配置(OCI registry 或 ChartMuseum)。
+// Host 为仓库地址,可带 http:// 前缀表示走明文 HTTP(默认 https);
+// Project 为 chart 存放的项目/命名空间路径,如 "datacenter-test-chart",
+// OCI 推送目标为 host/project/<chartName>:<chartVersion>,ChartMuseum 则透传给其 API。
+type ChartRepo struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	Name        string    `json:"name" gorm:"type:varchar(100);uniqueIndex;not null"`
+	Type        string    `json:"type" gorm:"type:varchar(20);not null"` // oci / chartmuseum
+	Host        string    `json:"host" gorm:"type:varchar(255);not null"`
+	Project     string    `json:"project" gorm:"type:varchar(255)"`
+	Username    string    `json:"username" gorm:"type:varchar(255)"`
+	PasswordEnc string    `json:"-" gorm:"column:password_enc;type:varchar(512)"`
+	Insecure    bool      `json:"insecure" gorm:"default:false"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func (ChartRepo) TableName() string { return "chart_repos" }
+
+// ChartUpload 是一次 chart 包上传的记录(单文件一条)。
+// RepoName/RepoType/TargetRef 在创建时快照,仓库配置后续修改/删除不影响历史记录展示。
+type ChartUpload struct {
+	ID           uint       `json:"id" gorm:"primaryKey"`
+	ChartRepoID  uint       `json:"chart_repo_id" gorm:"not null;index"`
+	RepoName     string     `json:"repo_name" gorm:"type:varchar(100)"`
+	RepoType     string     `json:"repo_type" gorm:"type:varchar(20)"`
+	TargetRef    string     `json:"target_ref" gorm:"type:varchar(512)"` // oci://host/project/name:version 或 host/api/charts
+	FileName     string     `json:"file_name" gorm:"type:varchar(255)"`
+	FilePath     string     `json:"file_path" gorm:"type:varchar(512)"` // 服务端文件路径(上传临时文件或用户填写的路径)
+	IsTemp       bool       `json:"is_temp" gorm:"default:false"`       // 浏览器上传的临时文件:推送成功后删除,失败保留以便重试
+	ChartName    string     `json:"chart_name" gorm:"type:varchar(255)"`
+	ChartVersion string     `json:"chart_version" gorm:"type:varchar(64)"`
+	Size         int64      `json:"size"`
+	Status       string     `json:"status" gorm:"type:varchar(20);default:'pending';index"`
+	Error        string     `json:"error" gorm:"type:text"`
+	Digest       string     `json:"digest" gorm:"type:varchar(255)"` // OCI 推送成功后的 manifest digest
+	CreatedBy    uint       `json:"created_by" gorm:"default:0"`
+	CreatedAt    time.Time  `json:"created_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+}
+
+func (ChartUpload) TableName() string { return "chart_uploads" }
 
 // LoginLog 记录登录审计。
 type LoginLog struct {

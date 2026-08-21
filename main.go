@@ -38,6 +38,8 @@ func main() {
 	_ = task.Instance()
 	// 恢复上次进程退出时遗留的任务(running 置 failed,pending 重新入队)。
 	task.RecoverStuckTasks()
+	// chart 上传中断记录直接置失败(临时文件可能已随重启消失)。
+	store.RecoverChartUploads()
 
 	// 历史数据保留清理:启动跑一次,之后每天一次。
 	retainCtx, retainCancel := context.WithCancel(context.Background())

@@ -29,6 +29,16 @@ const routes = [
     component: () => import('@/views/RegistryView.vue'),
   },
   {
+    path: '/chart-repos',
+    name: 'ChartRepos',
+    component: () => import('@/views/ChartRepoView.vue'),
+  },
+  {
+    path: '/chart-upload',
+    name: 'ChartUpload',
+    component: () => import('@/views/ChartUploadView.vue'),
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('@/views/SettingsView.vue'),

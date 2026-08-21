@@ -19,6 +19,8 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// chart 上传走 multipart,放宽内存缓冲上限(超出部分自动落盘临时文件)。
+	r.MaxMultipartMemory = 64 << 20
 
 	// CORS:仅放行本地开发前端(Vite dev server, 通常 :3000/:5173)与同源请求。
 	// 生产环境前后端同源,不需要跨域。鉴权用 Bearer token(非 cookie),无需 AllowCredentials。
@@ -53,6 +55,8 @@ func SetupRouter(db *gorm.DB, staticFS fs.FS) *gin.Engine {
 		NewCatalogHandler(db).RegisterRoutes(api)
 		NewTaskHandler(db).RegisterRoutes(api)
 		NewSettingsHandler(db).RegisterRoutes(api)
+		NewChartRepoHandler(db).RegisterRoutes(api)
+		NewChartUploadHandler(db).RegisterRoutes(api)
 	}
 
 	if staticFS != nil {

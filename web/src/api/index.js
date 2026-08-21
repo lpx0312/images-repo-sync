@@ -32,3 +32,20 @@ export const settingsAPI = {
   get: () => client.get('/settings'),
   update: (payload) => client.put('/settings', payload),
 }
+
+export const chartRepoAPI = {
+  list: () => client.get('/chart-repos'),
+  create: (payload) => client.post('/chart-repos', payload),
+  update: (id, payload) => client.put(`/chart-repos/${id}`, payload),
+  remove: (id) => client.delete(`/chart-repos/${id}`),
+  test: (id) => client.post(`/chart-repos/${id}/test`),
+}
+
+export const chartUploadAPI = {
+  // 大文件上传放宽超时(全局默认 30s 不够)。
+  uploadFiles: (formData, onProgress) =>
+    client.post('/charts/upload-files', formData, { timeout: 600000, onUploadProgress: onProgress }),
+  uploadPaths: (payload) => client.post('/charts/upload-paths', payload, { timeout: 60000 }),
+  list: (params) => client.get('/charts/uploads', { params }),
+  retry: (id) => client.post(`/charts/uploads/${id}/retry`),
+}

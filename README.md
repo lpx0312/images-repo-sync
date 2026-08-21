@@ -8,6 +8,7 @@
 
 - 🔐 **登录鉴权**：JWT + bcrypt，首次启动自动创建默认 admin 账号，支持修改密码、记住登录、30 分钟无操作自动登出。
 - 🗄️ **仓库管理**：配置多个源/目标仓库（Harbor / Docker Hub / ACR / 华为云 SWR / 通用 Registry），含地址、账号密码、TLS、默认 project；密码 AES-GCM 加密存储。
+- 📦 **Chart 仓库与上传**：配置多个 Chart 仓库（OCI / ChartMuseum），支持浏览器选择本地 `.tgz` 或填写服务器路径批量上传；上传自动解析 `Chart.yaml`，OCI 推送产物与 `helm push` 完全一致（可用 `helm pull` 拉回）；每次上传（成功/失败）均有记录，失败可重试。
 - 🔀 **三种同步模式**：单一项目（扁平）、保持源项目路径、仅替换仓库地址（见下文）。
 - 🏗️ **目标架构**：新建任务可选仅 AMD64 / 仅 ARM64 / 所有架构（默认 AMD64，可在系统设置中修改默认值）。单架构使用 `skopeo --override-arch`；所有架构使用 `skopeo copy --all`。
 - 📋 **镜像来源**：支持「粘贴列表」和「浏览目录」（列出 repo/tag 勾选）两种方式。
@@ -93,6 +94,20 @@ make web-dev        # 或: cd web && npm install && npm run dev
 - 隐式 `docker.io` 自动补全：`nginx:1.25` 视作 `docker.io/library/nginx:1.25`
 - 模式① 对 `docker.io/library/nginx:1.25` → 取末段 `nginx:1.25` → `harbor/mirror/nginx:1.25`
 - 模式③ 对 `bitnami/redis:7.0`（隐式 docker.io）→ `harbor/bitnami/redis:7.0`
+
+## Chart 仓库与上传
+
+在「Chart 仓库」页可配置多个目标仓库，两种类型：
+
+- **OCI**（Harbor 等 OCI 兼容 registry）：填写仓库地址、Chart 项目（如 `datacenter-test-chart`）、账号密码。上传目标为 `oci://<host>/<project>/<chart名>:<chart版本>`，产物结构与 `helm push` 完全一致，可用 `helm pull oci://...` 直接拉取。地址默认走 HTTPS，可加 `http://` 前缀走明文 HTTP；自签证书开启「跳过 TLS」。
+- **ChartMuseum**：填写地址与账号密码，走标准 `POST /api/charts` 接口；挂在子路径时把前缀写进地址即可。
+
+「Chart 上传」页选择目标仓库后，两种包来源：
+
+- **本地文件**：浏览器多选/拖拽 `.tgz`，适合少量上传；
+- **服务器路径**：填写容器内文件或目录（目录扫描第一层 `*.tgz`，不递归），适合批量；测试时可将宿主机 chart 目录 `-v` 挂载进容器。
+
+上传时自动解析包内 `Chart.yaml`（非法包会跳过并给出原因），后台逐个推送；上传记录含状态、digest、错误明细，失败可一键重试，按 `TASK_RETENTION_DAYS` 一同清理。OCI 推送由后端纯 Go 实现（Registry v2 blob 上传 + manifest），镜像内无需安装 helm。
 
 ## 环境变量
 
@@ -189,7 +204,8 @@ images-repo-sync/
 │   ├── crypto/   crypto.go       # AES-GCM 加解密
 │   ├── middleware/auth.go
 │   ├── registry/ probe.go        # 仓库连通性探测
-│   ├── api/      auth.go, registry.go, catalog.go, task.go, settings.go, router.go
+│   ├── chart/   meta.go, push.go # chart tgz 解析 + OCI/ChartMuseum 推送(纯 Go,无需 helm)
+│   ├── api/      auth.go, registry.go, catalog.go, task.go, settings.go, chartrepo.go, chartupload.go, router.go
 │   ├── skopeo/   ref.go, copy.go, exec.go, authfile.go, catalog.go
 │   └── task/     manager.go, runner.go, types.go
 ├── web/                          # Vue3 前端
@@ -218,6 +234,12 @@ images-repo-sync/
 | GET | `/api/catalog/:id/repos` | Bearer | 列出 repo |
 | GET | `/api/catalog/:id/tags?repo=` | Bearer | 列出 tag |
 | GET | `/api/catalog/:id/projects` | Bearer | 列出 Harbor project |
+| GET/POST/PUT/DELETE | `/api/chart-repos` | Bearer | Chart 仓库 CRUD |
+| POST | `/api/chart-repos/:id/test` | Bearer | 测试 Chart 仓库连接 |
+| POST | `/api/charts/upload-files` | Bearer | 上传 chart（multipart：repo_id + files） |
+| POST | `/api/charts/upload-paths` | Bearer | 上传 chart（JSON：repo_id + 服务器路径/目录） |
+| GET | `/api/charts/uploads` | Bearer | 上传记录列表 |
+| POST | `/api/charts/uploads/:id/retry` | Bearer | 重试失败的上传 |
 | GET/PUT | `/api/settings` | Bearer | 系统设置（如默认同步架构） |
 | POST | `/api/tasks` | Bearer | 创建同步任务 |
 | GET | `/api/tasks` `/api/tasks/:id` | Bearer | 任务列表/详情 |

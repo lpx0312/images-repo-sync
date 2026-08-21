@@ -38,6 +38,10 @@ func cleanupExpiredData() {
 		if n := deleteOldTasks(cfg.TaskRetentionDays); n > 0 {
 			log.Printf("[store] 已清理 %d 个 %d 天前的历史任务(含明细)", n, cfg.TaskRetentionDays)
 		}
+		// chart 上传记录与任务共用保留天数。
+		if n := deleteOldChartUploads(cfg.TaskRetentionDays); n > 0 {
+			log.Printf("[store] 已清理 %d 条 %d 天前的 chart 上传记录", n, cfg.TaskRetentionDays)
+		}
 	}
 	if cfg.LoginLogRetentionDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -cfg.LoginLogRetentionDays)
@@ -70,6 +74,24 @@ func deleteOldTasks(days int) int64 {
 		func() ([]uint, error) {
 			var ids []uint
 			err := DB.Model(&model.SyncTask{}).
+				Where("status IN ? AND created_at < ?", terminal, cutoff).
+				Limit(retentionBatch).Pluck("id", &ids).Error
+			return ids, err
+		})
+}
+
+// deleteOldChartUploads 删除超过保留天数的已结束 chart 上传记录,返回删除条数。
+func deleteOldChartUploads(days int) int64 {
+	cutoff := time.Now().AddDate(0, 0, -days)
+	terminal := []string{model.TaskStatusSuccess, model.TaskStatusFailed}
+	return deleteBatch(
+		func(ids []uint) int64 {
+			res := DB.Where("id IN ?", ids).Delete(&model.ChartUpload{})
+			return res.RowsAffected
+		},
+		func() ([]uint, error) {
+			var ids []uint
+			err := DB.Model(&model.ChartUpload{}).
 				Where("status IN ? AND created_at < ?", terminal, cutoff).
 				Limit(retentionBatch).Pluck("id", &ids).Error
 			return ids, err
