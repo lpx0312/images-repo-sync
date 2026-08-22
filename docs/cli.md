@@ -96,6 +96,9 @@ irs registries delete 2 --yes                # 删除需显式确认
 
 ## 浏览目录(catalog)
 
+仅对 **Harbor** 与 **通用 Registry(generic)** 类型的仓库有意义（Harbor 走 v2 API，
+generic 走 `_catalog`）；ACR / SWR / DockerHub 无法可靠列出目录，请用「粘贴 refs」方式。
+
 ```bash
 irs catalog projects 1                       # Harbor 列出全部项目
 irs catalog repos 1 --project datacenter-test-chart
@@ -104,10 +107,10 @@ irs catalog tags 1 --repo library/nginx      # 列出某镜像的 tag
 ```
 
 注意：
-- `catalog tags` 依赖平台容器内的 skopeo，对 chart OCI artifact 仓库可能失败；
-  查 chart 版本请用 Harbor REST `/v2/<project>/<chart>/tags/list`（只读）。
-- ACR 等禁用 `_catalog` 的仓库 `catalog repos` 会报认证失败，属预期，
-  请改用同步任务的「粘贴 refs」方式。
+- repo 名可以是仓库内路径（如 `project/nginx`，浏览目录返回的形式）或完整引用
+  （`host/project/nginx`）；服务端统一锚定到配置仓库的地址再查询。
+- chart 包(OCI artifact)同样可以用 `catalog tags` 列出版本。
+- ACR 等禁用 `_catalog` 的仓库 `catalog repos` 会报认证失败，属预期。
 
 ## 同步任务(tasks)
 
@@ -194,8 +197,7 @@ irs charts uploads --status failed --json
 
 1. **Windows + Git Bash**：服务器绝对路径参数（如 `upload-path` 的 `/charts`）
    会被 MSYS 转换为 Windows 路径，需加 `MSYS_NO_PATHCONV=1` 前缀或写 `//charts`。
-2. `catalog tags` 对 chart OCI artifact 仓库可能失败（skopeo 限制），
-   查 chart 版本用 Harbor REST tags/list。
-3. ACR 禁用 `_catalog`，`catalog repos` 报认证失败属预期。
-4. 登录接口有防暴力锁定：同一用户名连续失败 5 次锁 10 分钟，
+2. 浏览目录(catalog)仅支持 Harbor / 通用 Registry 源；ACR 禁用 `_catalog`，
+   `catalog repos` 报认证失败属预期。
+3. 登录接口有防暴力锁定：同一用户名连续失败 5 次锁 10 分钟，
    自动化中请确保凭据正确后再批量调用。

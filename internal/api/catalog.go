@@ -84,7 +84,8 @@ func (h *CatalogHandler) Repos(c *gin.Context) {
 // Tags GET /api/catalog/:id/tags?repo=<repo>
 //
 // 用 skopeo list-tags 列出某 repo 的所有 tag。
-// repo 形如 docker.io/library/nginx 或 harbor.corp/library/nginx(不含 docker://)。
+// repo 可以是「仓库内路径」(如 project/nginx,浏览目录返回的形式),
+// 也可以是完整引用(如 harbor.corp/project/nginx:1.0)。
 func (h *CatalogHandler) Tags(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	m, pass, err := h.loadReg(uint(id))
@@ -97,17 +98,14 @@ func (h *CatalogHandler) Tags(c *gin.Context) {
 		badReq(c, "repo 不能为空")
 		return
 	}
-	// repo 可能只给了 host 后路径,也可能给了完整引用;统一取 path 部分作 list-tags 的输入。
-	host, path := skopeo.ParseSource(repo)
-	if path == "" {
-		badReq(c, "repo 无效")
+	// 统一锚定到当前配置的仓库:repo 名里没有 host(浏览目录场景)时,
+	// 若按通用解析规则会被误判为 docker.io 下的镜像导致 list-tags 打到错误 registry;
+	// 因此取 path 后始终用配置仓库自己的 host 拼 list-tags 引用。
+	listRef, err := buildListRef(m.Host, repo)
+	if err != nil {
+		badReq(c, err.Error())
 		return
 	}
-	// list-tags 的 repo 参数不应含 tag。
-	if i := strings.LastIndexByte(path, ':'); i >= 0 {
-		path = path[:i]
-	}
-	listRef := host + "/" + path
 
 	tags, err := skopeo.ListTags(c.Request.Context(), listRef, m.Host, m.Username, pass, m.Insecure)
 	if err != nil {
@@ -115,6 +113,29 @@ func (h *CatalogHandler) Tags(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"ok": true, "tags": tags, "repo": listRef})
+}
+
+// buildListRef 把用户/浏览目录传入的 repo 名规范化为「host/path」的 list-tags 引用:
+// 去掉 docker:// 前缀与 tag,若名字带仓库 host 前缀则去掉,最后统一拼上配置仓库的 host。
+func buildListRef(regHost, repo string) (string, error) {
+	regHost = strings.Trim(strings.TrimSpace(regHost), "/")
+	if regHost == "" {
+		return "", fmt.Errorf("仓库地址无效")
+	}
+	_, path := skopeo.ParseSource(repo)
+	if path == "" {
+		return "", fmt.Errorf("repo 无效")
+	}
+	// 去掉误带的 tag 部分(list-tags 只接受 repo)。
+	if i := strings.LastIndexByte(path, ':'); i >= 0 {
+		path = path[:i]
+	}
+	// 名字里可能已带本仓库 host(如粘贴完整引用),去掉避免 host 重复。
+	path = strings.TrimPrefix(path, regHost+"/")
+	if path == "" {
+		return "", fmt.Errorf("repo 无效")
+	}
+	return regHost + "/" + path, nil
 }
 
 // Projects GET /api/catalog/:id/projects
@@ -220,7 +241,7 @@ func harborRepos(req *http.Request, host, user, pass string, insecure bool, proj
 				continue
 			}
 			for _, n := range names {
-				all = append(all, p+"/"+n)
+				all = append(all, harborRepoName(p, n))
 			}
 		}
 		return all, nil
@@ -231,13 +252,24 @@ func harborRepos(req *http.Request, host, user, pass string, insecure bool, proj
 	}
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		out = append(out, project+"/"+n)
+		out = append(out, harborRepoName(project, n))
 	}
 	return out, nil
 }
 
+// harborRepoName 规范化 Harbor 返回的 repo 名为「project/repo」。
+// Harbor v2 的 repositories 接口返回的 name 已含项目前缀(project/repo),
+// 直接再拼项目名会得到 project/project/repo 导致后续 tag 列表/同步全部打错目标;
+// 这里仅当返回名缺前缀(个别旧版本/代理行为)时才补。
+func harborRepoName(project, name string) string {
+	if strings.HasPrefix(name, project+"/") {
+		return name
+	}
+	return project + "/" + name
+}
+
 // harborListRaw 调 Harbor v2 列表接口的单页,从每个元素抽取 field 字段。
-// Harbor 默认返回的 name 对 repo 是「项目内名字」(不含 project 前缀)。
+// 注意:repositories 接口返回的 name 已含项目前缀(见 harborRepoName)。
 func harborListRaw(req *http.Request, host, user, pass string, insecure bool, path, field string) ([]string, error) {
 	// Harbor v2 list 接口要求 page 与 page_size 同时存在,缺 page 会返回 422。
 	if strings.Contains(path, "page_size=") && !strings.Contains(path, "page=") {

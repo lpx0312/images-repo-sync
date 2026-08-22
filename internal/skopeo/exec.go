@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"images-repo-sync/internal/config"
@@ -69,4 +70,27 @@ func runWithStream(ctx context.Context, args []string, handler LineHandler) erro
 // defaultPath 返回子进程 PATH,确保能找到 skopeo。
 func defaultPath() string {
 	return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+}
+
+// captureStdout 执行 skopeo 子命令,仅收集 stdout 全文(忽略 stderr)。
+// 供需要解析完整 JSON 输出的命令使用(如 list-tags),避免 stderr 行混入。
+func captureStdout(ctx context.Context, args []string) (string, error) {
+	bin := config.AppConfig.SkopeoBin
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = []string{"PATH=" + defaultPath()}
+	out, err := cmd.Output() // 只取 stdout;退出错误中附带 stderr 片段
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			msg := strings.TrimSpace(string(ee.Stderr))
+			if len(msg) > 200 {
+				msg = msg[:200] + "..."
+			}
+			return "", fmt.Errorf("%w: %s", err, msg)
+		}
+		return "", err
+	}
+	return string(out), nil
 }

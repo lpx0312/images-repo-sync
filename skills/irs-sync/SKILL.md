@@ -71,5 +71,5 @@ irs tasks list --size 5              # 历史任务
 - `charts upload` 默认等待全部结果再退出；`--no-wait` 只提交。
 - 非法 tgz 会被服务端校验跳过并打印 `[跳过] 原因`，不影响其他包。
 - Git Bash 下服务器绝对路径（`/charts`）会被 MSYS 转成 Windows 路径，需 `MSYS_NO_PATHCONV=1` 前缀或用 `//charts`。
-- `catalog tags` 依赖容器内 skopeo，对 chart OCI artifact 可能失败；查 chart 版本用工作流 A 里的 Harbor REST 只读接口。
+- 浏览目录（`catalog repos/tags`）仅对 Harbor / 通用 Registry 类型的源仓库有效；repo 名可直接用 `project/name` 形式，服务端会锚定到配置仓库地址。ACR 源请直接粘贴完整镜像引用。
 - 退出码：成功 0；命令/参数错误 2；业务失败（上传失败/任务有失败项）1。AI 自动化应检查退出码。

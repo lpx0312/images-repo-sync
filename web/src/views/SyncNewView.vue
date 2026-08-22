@@ -45,11 +45,16 @@
             <div class="form-tip">支持隐式 docker.io；官方镜像会自动补 library/ 前缀。每行一条，空行忽略。</div>
           </el-tab-pane>
 
-          <el-tab-pane label="浏览目录" name="catalog">
+          <el-tab-pane label="浏览目录" name="catalog" :disabled="!canBrowse">
             <CatalogBrowser
-              v-if="form.sourceRegistryId"
+              v-if="form.sourceRegistryId && canBrowse"
               :registry-id="form.sourceRegistryId"
+              :registry-host="sourceRegistry?.host || ''"
               v-model:selected="pickedRefs"
+            />
+            <el-empty
+              v-else-if="form.sourceRegistryId"
+              description="该仓库类型不支持浏览目录（仅 Harbor / 通用 Registry 支持），请使用「粘贴镜像列表」"
             />
             <el-empty v-else description="请先选择源仓库" />
           </el-tab-pane>
@@ -184,7 +189,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Back } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -222,6 +227,17 @@ const loadingProjects = ref(false)
 const sourceRegistry = computed(() => allRegistries.value.find((r) => r.id === form.sourceRegistryId))
 const targetRegistry = computed(() => allRegistries.value.find((r) => r.id === form.targetRegistryId))
 const targetRegistryType = computed(() => (targetRegistry.value?.type || '').toLowerCase())
+
+// 浏览目录仅支持 Harbor 与通用 Registry:
+// Harbor 走 v2 API 列 project/repo,通用 Registry 走 _catalog;
+// ACR/SWR/DockerHub 无法可靠列出仓库目录,只能粘贴列表。
+const sourceRegistryType = computed(() => (sourceRegistry.value?.type || '').toLowerCase())
+const canBrowse = computed(() => ['harbor', 'generic'].includes(sourceRegistryType.value))
+
+// 源仓库切换到不支持浏览的类型时,若当前停在浏览页则回到粘贴列表。
+watch(canBrowse, (ok) => {
+  if (!ok && pickTab.value === 'catalog') pickTab.value = 'list'
+})
 
 // 粘贴列表解析后的引用。
 const listRefs = computed(() =>

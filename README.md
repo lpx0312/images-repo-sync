@@ -13,7 +13,7 @@
 - 🤖 **AI Skill（irs-sync）**：为 AI 助手（ZCode 等）提供的技能，通过 `irs` CLI 自动化完成镜像同步与 chart 上传，内置「写操作仅限 Harbor `datacenter-test-chart` 项目」的安全约束。
 - 🔀 **三种同步模式**：单一项目（扁平）、保持源项目路径、仅替换仓库地址（见下文）。
 - 🏗️ **目标架构**：新建任务可选仅 AMD64 / 仅 ARM64 / 所有架构（默认 AMD64，可在系统设置中修改默认值）。单架构使用 `skopeo --override-arch`；所有架构使用 `skopeo copy --all`。
-- 📋 **镜像来源**：支持「粘贴列表」和「浏览目录」（列出 repo/tag 勾选）两种方式。
+- 📋 **镜像来源**：支持「粘贴列表」和「浏览目录」（列出 repo/tag 勾选）两种方式；浏览目录仅对 **Harbor** 与 **通用 Registry** 类型的源仓库开放（Harbor 走 v2 API，通用走 `_catalog`），勾选结果自动带上源仓库地址生成完整引用。
 - 📊 **实时进度**：后台任务 + SSE 实时流，日志窗口逐行刷新。
 - ⚙️ **系统设置**：可配置新建同步任务的默认架构。
 - 💾 **落盘持久化**：SQLite 单文件挂载到 `/data`，容器重建数据不丢。
@@ -282,7 +282,7 @@ images-repo-sync/
 ## 注意事项
 
 - **默认密码**：未设置 `ADMIN_PASSWORD` 时应用默认 `admin / admin123`；`make up` 使用 Makefile 开发默认值 `Admin@123`；docker compose 使用 `.env`（`.env.example` 为 `Admin@ChangeMe`）。均为首次启动便利，生产环境务必设置强密码并登录后修改。
-- **Harbor `_catalog`**：很多 Harbor 部署禁用了 registry 原生 `_catalog`；本工具对 Harbor 类型走 v2 API（`/api/v2.0/projects/.../repositories`），其他类型走 `_catalog`。若浏览目录失败，请改用「粘贴列表」方式。
+- **Harbor `_catalog`**：很多 Harbor 部署禁用了 registry 原生 `_catalog`；本工具对 Harbor 类型走 v2 API（`/api/v2.0/projects/.../repositories`），通用 Registry 走 `_catalog`；ACR / 华为云 SWR / Docker Hub 无法可靠列出目录，「浏览目录」仅对前两者开放，其余类型请用「粘贴列表」。若浏览目录失败，也请改用「粘贴列表」方式。
 - **华为云 SWR**：基础版拒收顶层 OCI image index。目标类型选「华为云 SWR」时同步不加 `--preserve-digests`，skopeo 会把 OCI index 转成 Docker manifest list（仅顶层 digest 变化，镜像内容不变）。其他类型若遇到同样拒收，会自动去掉该参数重试一次。
 - **insecure 仓库**：自签证书的仓库请在仓库配置中开启「跳过 TLS」（只跳过证书校验，仍走 HTTPS）。
 - **并发**：当前任务串行执行（SQLite 写串行 + 同步 IO 密集），避免对目标仓库造成过大压力。

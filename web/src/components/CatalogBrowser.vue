@@ -83,6 +83,9 @@ import { catalogAPI } from '@/api'
 
 const props = defineProps({
   registryId: { type: Number, required: true },
+  // 仓库地址(harbor.example.com[:port]);拼进选出的完整镜像引用,
+  // 保证任务执行时 skopeo 从正确的源仓库拉取,而不是被解析成 docker.io。
+  registryHost: { type: String, default: '' },
   selected: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:selected'])
@@ -144,7 +147,12 @@ function onTagSelChange(sel) {
 }
 
 function refOf(tag) {
-  return `${currentRepo.value}:${tag}`
+  // 目录里的 repo 名不含仓库地址(如 project/repo),拼上配置的 host
+  // 生成完整引用 host/project/repo:tag,供同步任务直接使用。
+  const repo = props.registryHost
+    ? `${props.registryHost}/${currentRepo.value}`
+    : currentRepo.value
+  return `${repo}:${tag}`
 }
 
 function addSelected() {
