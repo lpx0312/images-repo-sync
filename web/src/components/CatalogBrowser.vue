@@ -23,9 +23,10 @@
       highlight-current-row
       @current-change="onPickRepo"
     >
-      <el-table-column label="仓库" prop="name" min-width="280">
+      <el-table-column label="仓库" min-width="280">
         <template #default="{ row }">
-          <span class="cell-mono">{{ row.name }}</span>
+          <!-- 接口返回的 repos 是字符串数组(host 后完整路径),row 本身就是仓库名 -->
+          <span class="cell-mono">{{ row }}</span>
         </template>
       </el-table-column>
     </el-table>
@@ -122,8 +123,8 @@ async function loadRepos() {
 
 function onPickRepo(row) {
   if (!row) return
-  currentRepo.value = row.name
-  loadTags(row.name)
+  currentRepo.value = row // row 即仓库名字符串
+  loadTags(row)
 }
 
 async function loadTags(repo) {
