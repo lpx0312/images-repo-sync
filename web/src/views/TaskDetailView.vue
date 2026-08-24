@@ -241,19 +241,19 @@ function applyEvent(eventName, payload) {
       break
     case 'task_started':
       task.status = 'running'
-      pushLog('任务开始执行', 'info')
+      pushLog('任务开始执行', 'info', payload.time)
       break
     case 'item_started':
       updateItem(payload.item_id, { status: 'running' })
       pushLog(`▶ ${payload.source_ref} → ${payload.target_ref}`)
       break
     case 'item_progress':
-      if (payload.message) pushLog(`   ${payload.message}`, 'muted')
+      if (payload.message) pushLog(`   ${payload.message}`, 'muted', payload.time)
       break
     case 'item_success':
       updateItem(payload.item_id, { status: 'success', digest: payload.data?.digest || '' })
       task.succeeded = (task.succeeded || 0) + 1
-      pushLog(`✓ 成功 ${payload.target_ref}`, 'success')
+      pushLog(`✓ 成功 ${payload.target_ref}`, 'success', payload.time)
       break
     case 'item_failed':
       updateItem(payload.item_id, { status: payload.message === '已取消' ? 'skipped' : 'failed', error: payload.message })
@@ -261,7 +261,7 @@ function applyEvent(eventName, payload) {
         task.skipped = (task.skipped || 0) + 1
       } else {
         task.failed = (task.failed || 0) + 1
-        pushLog(`✗ 失败 ${payload.target_ref || payload.source_ref} — ${payload.message}`, 'error')
+        pushLog(`✗ 失败 ${payload.target_ref || payload.source_ref} — ${payload.message}`, 'error', payload.time)
       }
       break
     case 'task_finished':
@@ -273,7 +273,7 @@ function applyEvent(eventName, payload) {
           skipped: payload.data.skipped,
         })
       }
-      pushLog(`任务结束: ${statusLabel(task.status)}`, task.status === 'success' ? 'success' : 'error')
+      pushLog(`任务结束: ${statusLabel(task.status)}`, task.status === 'success' ? 'success' : 'error', payload.time)
       stopStream()
       reload()
       break
@@ -285,8 +285,11 @@ function updateItem(itemId, patch) {
   if (it) Object.assign(it, patch)
 }
 
-function pushLog(text, level = '') {
-  logs.value.push({ text: `[${dayjs().format('HH:mm:ss')}] ${text}`, level })
+function pushLog(text, level = '', ts = null) {
+  // 优先用事件携带的服务端时间(实时事件为执行时刻,回放事件为真实执行时间);
+  // 无事件时间的兜底用本机当前时间。
+  const t = ts ? dayjs(ts).format('HH:mm:ss') : dayjs().format('HH:mm:ss')
+  logs.value.push({ text: `[${t}] ${text}`, level })
   if (logs.value.length > 2000) logs.value.splice(0, logs.value.length - 2000)
   if (autoScroll.value) {
     nextTick(() => {
@@ -394,6 +397,9 @@ onUnmounted(() => {
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-md);
   padding: var(--space-sm);
+  /* grid 子项默认 min-width:auto,长报错行会把列撑出横向溢出 */
+  min-width: 0;
+  overflow: hidden;
 }
 .pane-title {
   font-size: 13px;
@@ -421,7 +427,10 @@ onUnmounted(() => {
 .ellipsis { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-box {
   height: 420px;
+  width: 100%;
+  max-width: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   background: #0f172a;
   border-radius: var(--radius-sm);
   padding: var(--space-sm);

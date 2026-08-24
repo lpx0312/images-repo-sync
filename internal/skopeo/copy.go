@@ -107,11 +107,26 @@ func buildCopyArgs(opt CopyOptions) []string {
 }
 
 // IsPreserveDigestsConflict 判断 copy 失败输出是否属于「--preserve-digests 与目标格式不兼容」:
-// 目标仓库拒绝了源镜像的 manifest 格式(如华为 SWR 基础版拒收顶层 OCI image index),
+// 目标仓库拒绝了源镜像的 manifest 格式(如华为云 SWR 基础版拒收顶层 OCI image index),
 // skopeo 需要转换成目标支持的格式(如 Docker manifest list),但被 --preserve-digests 禁止改写。
 // 该场景下去掉 --preserve-digests 重试即可成功(skopeo 在无需转换时仍会保持原 digest)。
 func IsPreserveDigestsConflict(stderrTail string) bool {
 	return strings.Contains(stderrTail, "Instructed to preserve digests")
+}
+
+// FriendlyCopyError 把 skopeo copy 的常见报错翻译为更可操作的中文提示。
+// 无法识别时原样返回;提示中保留原始报错,便于进一步排查。
+func FriendlyCopyError(stderrTail string) string {
+	switch {
+	case strings.Contains(stderrTail, "no image found in manifest list for architecture"):
+		return "源镜像不包含所选架构:请把目标架构改为「所有架构」,或该镜像实际支持的架构。原始报错: " + stderrTail
+	case strings.Contains(stderrTail, "manifest unknown") || strings.Contains(stderrTail, "manifest-unknown"):
+		return "源镜像或 tag 不存在:请确认镜像地址与 tag 是否正确。原始报错: " + stderrTail
+	case strings.Contains(stderrTail, "unauthorized"):
+		return "认证失败:请检查源/目标仓库的账号密码。原始报错: " + stderrTail
+	default:
+		return stderrTail
+	}
 }
 
 // ringBuffer 是定长的环形缓冲,只保留最近 N 行,用于截取命令尾部输出。

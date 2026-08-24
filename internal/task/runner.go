@@ -289,11 +289,12 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 				break
 			} else {
 				failed++
+				errText := skopeo.FriendlyCopyError(res.StderrTail)
 				updateItem(db, it.ID, map[string]any{
-					"status": model.ItemStatusFailed, "error": res.StderrTail, "finished_at": finishedAt,
+					"status": model.ItemStatusFailed, "error": errText, "finished_at": finishedAt,
 				})
 				m.emit(taskID, EventItemFailed, Event{
-					ItemID: it.ID, SourceRef: it.SourceRef, TargetRef: it.TargetRef, Message: res.StderrTail,
+					ItemID: it.ID, SourceRef: it.SourceRef, TargetRef: it.TargetRef, Message: errText,
 				})
 			}
 		}

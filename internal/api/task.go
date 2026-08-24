@@ -368,14 +368,19 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 	})
 
 	// 已结束任务:回放每个 item 的结果作为日志(避免快任务跑完后详情页日志为空),
-	// 然后结束流。
+	// 然后结束流。回放事件携带各自的真实执行时间,前端按事件时间显示而非页面打开时间。
 	if t.Status == model.TaskStatusSuccess || t.Status == model.TaskStatusFailed || t.Status == model.TaskStatusCanceled {
-		writeSSE(task.Event{Type: task.EventTaskStarted, TaskID: uint(id), Data: map[string]any{"total": len(t.Items)}})
+		startedAt := time.Now()
+		if t.StartedAt != nil {
+			startedAt = *t.StartedAt
+		}
+		writeSSE(task.Event{Type: task.EventTaskStarted, TaskID: uint(id), Time: startedAt, Data: map[string]any{"total": len(t.Items)}})
 		for _, it := range t.Items {
 			evt := task.Event{
 				ItemID:    it.ID,
 				SourceRef: it.SourceRef,
 				TargetRef: it.TargetRef,
+				Time:      itemEventTime(it.StartedAt, it.FinishedAt, startedAt),
 			}
 			switch it.Status {
 			case model.ItemStatusSuccess:
@@ -393,7 +398,11 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 			}
 			writeSSE(evt)
 		}
-		writeSSE(task.Event{Type: task.EventTaskFinished, TaskID: uint(id),
+		finishedAt := time.Now()
+		if t.FinishedAt != nil {
+			finishedAt = *t.FinishedAt
+		}
+		writeSSE(task.Event{Type: task.EventTaskFinished, TaskID: uint(id), Time: finishedAt,
 			Data: map[string]any{
 				"status":    t.Status,
 				"succeeded": t.Succeeded,
@@ -494,4 +503,16 @@ func (h *TaskHandler) RegisterRoutes(rg *gin.RouterGroup) {
 func nowPtr() *time.Time {
 	t := time.Now()
 	return &t
+}
+
+// itemEventTime 取回放事件应显示的时间:优先明细的结束/开始时间,
+// 均缺失时(未执行的明细)回退任务开始时间。
+func itemEventTime(started, finished *time.Time, fallback time.Time) time.Time {
+	if finished != nil {
+		return *finished
+	}
+	if started != nil {
+		return *started
+	}
+	return fallback
 }
