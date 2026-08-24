@@ -54,6 +54,11 @@ func SplitHost(host string) (scheme, hostOnly string) {
 // Ref 返回人类可读的推送目标地址(记录在 ChartUpload.TargetRef)。
 func (t Target) Ref(chartName, version string) string {
 	if t.Type == model.ChartRepoTypeChartMuseum {
+		// 填了项目默认按 Harbor 内置 ChartMuseum 展示;标准 ChartMuseum 的
+		// 子路径前缀直接写在地址里(此时项目留空)。
+		if t.Project != "" {
+			return t.Scheme + "://" + joinURL(t.Host, "api/chartrepo", t.Project, "charts")
+		}
 		return t.Scheme + "://" + joinURL(t.Host, "api/charts")
 	}
 	return "oci://" + joinURL(joinURL(t.Host, t.Project), chartName) + ":" + version
@@ -87,7 +92,55 @@ func Push(ctx context.Context, t Target, m *Meta, data []byte, fileName string) 
 
 // ---------- ChartMuseum ----------
 
-// pushChartMuseum 走 ChartMuseum 的 POST /api/charts(multipart 字段 chart)。
+// harborDetect 是对目标地址的 Harbor 探测结果。
+type harborDetect struct {
+	IsHarbor        bool
+	WithChartMuseum bool
+}
+
+// detectHarbor 通过 systeminfo 判断 ChartMuseum 目标是否实为 Harbor。
+//
+// Harbor 内置的 ChartMuseum 不走标准 /api/charts,而是 /api/chartrepo/<项目>/charts,
+// 直接调标准接口会得到 404(HTML),因此推送与探测前都需要先识别。
+// 判定标准:/api/v2.0/systeminfo(旧版回退 /api/systeminfo)返回 200 且含 harbor_version。
+// 网络/解析失败一律视为非 Harbor,继续走标准 ChartMuseum 流程,让后续请求报出真实错误。
+func detectHarbor(ctx context.Context, t Target) harborDetect {
+	client := registry.HTTPClient(t.Insecure)
+	base := t.Scheme + "://" + t.Host
+	auth := registry.BasicAuthHeader(t.Username, t.Password)
+
+	for _, p := range []string{"/api/v2.0/systeminfo", "/api/systeminfo"} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+p, nil)
+		if err != nil {
+			return harborDetect{}
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return harborDetect{}
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			continue // 404 = 非 Harbor(ChartMuseum 对未知路径返回 404);401 等也按非 Harbor 处理
+		}
+		var info struct {
+			HarborVersion   string `json:"harbor_version"`
+			WithChartMuseum bool   `json:"with_chartmuseum"`
+		}
+		if json.Unmarshal(body, &info) == nil && info.HarborVersion != "" {
+			return harborDetect{IsHarbor: true, WithChartMuseum: info.WithChartMuseum}
+		}
+	}
+	return harborDetect{}
+}
+
+// pushChartMuseum 推送 chart 包。
+// 目标为 Harbor 时走 /api/chartrepo/<project>/charts(Chart 项目必填);
+// 标准 ChartMuseum 走 POST /api/charts(multipart 字段 chart)。
 func pushChartMuseum(ctx context.Context, t Target, m *Meta, data []byte, fileName string) (*PushResult, error) {
 	if fileName == "" {
 		fileName = m.Name + "-" + m.Version + ".tgz"
@@ -105,7 +158,19 @@ func pushChartMuseum(ctx context.Context, t Target, m *Meta, data []byte, fileNa
 		return nil, err
 	}
 
-	endpoint := t.Scheme + "://" + joinURL(t.Host, "api/charts")
+	var endpoint string
+	if hb := detectHarbor(ctx, t); hb.IsHarbor {
+		if !hb.WithChartMuseum {
+			return nil, fmt.Errorf("目标是 Harbor(%s) 但未启用 ChartMuseum 组件", t.Host)
+		}
+		if t.Project == "" {
+			return nil, fmt.Errorf("Harbor 的 ChartMuseum 必须填写 Chart 项目(即 Harbor 项目名)")
+		}
+		endpoint = t.Scheme + "://" + joinURL(t.Host, "api/chartrepo", t.Project, "charts")
+	} else {
+		endpoint = t.Scheme + "://" + joinURL(t.Host, "api/charts")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
 		return nil, err
@@ -514,22 +579,42 @@ func probeOCI(ctx context.Context, t Target) registry.ProbeResult {
 	}
 }
 
-// probeChartMuseum 探测 ChartMuseum 的 /health(旧版本回退 /api/health)。
+// probeChartMuseum 探测 ChartMuseum 连通性。
+// 目标为 Harbor 时验证 ChartMuseum 组件与项目级 chart API;
+// 标准 ChartMuseum 探测 /health(旧版本回退 /api/health)。
 func probeChartMuseum(ctx context.Context, t Target) registry.ProbeResult {
 	client := registry.HTTPClient(t.Insecure)
 	base := t.Scheme + "://" + t.Host
 	auth := registry.BasicAuthHeader(t.Username, t.Password)
 
+	if hb := detectHarbor(ctx, t); hb.IsHarbor {
+		if !hb.WithChartMuseum {
+			return registry.ProbeResult{OK: false, Message: "该 Harbor 未启用 ChartMuseum 组件,无法上传 chart", Endpoint: base}
+		}
+		if t.Project == "" {
+			// 没填项目时只验证 Harbor 可达 + 凭证(systeminfo 已带认证返回 200)。
+			return registry.ProbeResult{OK: true, Message: "连接成功(Harbor ChartMuseum),上传前请在配置中填写 Chart 项目", Endpoint: base + "/api/v2.0/systeminfo"}
+		}
+		endpoint := base + "/api/chartrepo/" + t.Project + "/charts"
+		resp, err := authedGet(ctx, client, endpoint, auth)
+		if err != nil {
+			return registry.ProbeResult{OK: false, Message: classifyNetErr(err).Error(), Endpoint: endpoint}
+		}
+		switch resp.StatusCode {
+		case http.StatusOK:
+			return registry.ProbeResult{OK: true, Message: "连接成功(Harbor ChartMuseum)", Endpoint: endpoint}
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return registry.ProbeResult{OK: false, Message: "认证失败:用户名或密码错误,或无该项目权限", Endpoint: endpoint}
+		case http.StatusNotFound:
+			return registry.ProbeResult{OK: false, Message: fmt.Sprintf("Harbor 项目 %q 不存在或不可访问", t.Project), Endpoint: endpoint}
+		default:
+			return registry.ProbeResult{OK: false, Message: fmt.Sprintf("仓库返回异常状态码 %d", resp.StatusCode), Endpoint: endpoint}
+		}
+	}
+
 	for _, p := range []string{"/health", "/api/health"} {
 		endpoint := base + p
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return registry.ProbeResult{OK: false, Message: err.Error()}
-		}
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := client.Do(req)
+		resp, err := authedGet(ctx, client, endpoint, auth)
 		if err != nil {
 			return registry.ProbeResult{OK: false, Message: classifyNetErr(err).Error(), Endpoint: endpoint}
 		}
@@ -548,4 +633,16 @@ func probeChartMuseum(ctx context.Context, t Target) registry.ProbeResult {
 		}
 	}
 	return registry.ProbeResult{OK: false, Message: "未找到 /health 端点:地址不是 ChartMuseum 或版本过旧", Endpoint: base}
+}
+
+// authedGet 发送带认证的 GET 并返回响应(调用方负责读/关 body)。
+func authedGet(ctx context.Context, client *http.Client, url, auth string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	return client.Do(req)
 }

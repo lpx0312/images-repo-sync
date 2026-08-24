@@ -64,20 +64,20 @@
         <el-form-item label="类型" prop="type">
           <el-select v-model="form.type" style="width: 100%">
             <el-option label="OCI(Harbor 等)" value="oci" />
-            <el-option label="ChartMuseum" value="chartmuseum" />
+            <el-option label="ChartMuseum(标准 / Harbor 内置)" value="chartmuseum" />
           </el-select>
           <div class="form-tip" style="margin-top: 4px">
             OCI:chart 以 OCI artifact 推送(等同 helm push oci://...);
-            ChartMuseum:走 POST /api/charts 接口
+            ChartMuseum:自动识别标准 ChartMuseum 与 Harbor 内置 ChartMuseum
           </div>
         </el-form-item>
         <el-form-item label="仓库地址" prop="host">
-          <el-input v-model="form.host" placeholder="dockerhub.kubekey.local,http:// 前缀走 HTTP" />
+          <el-input v-model="form.host" placeholder="192.168.0.88:8443 或 cm.example.com,http:// 前缀走 HTTP" />
         </el-form-item>
         <el-form-item label="Chart 项目" prop="project">
-          <el-input v-model="form.project" placeholder="如 datacenter-test-chart" />
+          <el-input v-model="form.project" placeholder="如 library" />
           <div class="form-tip" style="margin-top: 4px">
-            {{ form.type === 'oci' ? 'OCI 必填:chart 将推送到 host/project/<chart名>:<版本>' : '可选:ChartMuseum 挂在子路径时填写' }}
+            {{ form.type === 'oci' ? 'OCI 必填:chart 将推送到 host/project/<chart名>:<版本>' : 'Harbor 内置 ChartMuseum 必填(即 Harbor 项目名);标准 ChartMuseum 子路径请写在地址里,此处留空' }}
           </div>
         </el-form-item>
         <el-form-item label="用户名" prop="username">

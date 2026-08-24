@@ -105,7 +105,7 @@ make cli            # 编译 irs 到 bin/，见 docs/cli.md
 在「Chart 仓库」页可配置多个目标仓库，两种类型：
 
 - **OCI**（Harbor 等 OCI 兼容 registry）：填写仓库地址、Chart 项目（如 `datacenter-test-chart`）、账号密码。上传目标为 `oci://<host>/<project>/<chart名>:<chart版本>`，产物结构与 `helm push` 完全一致，可用 `helm pull oci://...` 直接拉取。地址默认走 HTTPS，可加 `http://` 前缀走明文 HTTP；自签证书开启「跳过 TLS」。
-- **ChartMuseum**：填写地址与账号密码，走标准 `POST /api/charts` 接口；挂在子路径时把前缀写进地址即可。
+- **ChartMuseum**：填写地址与账号密码，走标准 `POST /api/charts` 接口；挂在子路径时把前缀写进地址即可。**Harbor 内置的 ChartMuseum 自动识别**：检测到目标为 Harbor 时自动切换为 `/api/chartrepo/<项目>/charts` 接口，此时「Chart 项目」必填（即 Harbor 项目名）。
 
 「Chart 上传」页选择目标仓库后，两种包来源：
 
