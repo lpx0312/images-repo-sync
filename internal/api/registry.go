@@ -29,6 +29,7 @@ type registryDTO struct {
 	Password       string `json:"password"`
 	Insecure       bool   `json:"insecure"`
 	DefaultProject string `json:"default_project"`
+	InSourceGroup  bool   `json:"in_source_group"`
 }
 
 // toModel 把 DTO 转成模型并加密密码。Password 为空时(更新场景)保留原密码。
@@ -48,6 +49,7 @@ func (d *registryDTO) toModel(existing *model.Registry) (*model.Registry, error)
 	m.Username = strings.TrimSpace(d.Username)
 	m.Insecure = d.Insecure
 	m.DefaultProject = strings.TrimSpace(d.DefaultProject)
+	m.InSourceGroup = d.InSourceGroup
 
 	// Password 为空:更新时保留旧密码;否则视为确实没填。
 	if d.Password != "" {
@@ -79,6 +81,7 @@ type registryVO struct {
 	HasPassword    bool   `json:"has_password"`
 	Insecure       bool   `json:"insecure"`
 	DefaultProject string `json:"default_project"`
+	InSourceGroup  bool   `json:"in_source_group"`
 }
 
 func toVO(m *model.Registry) registryVO {
@@ -91,6 +94,7 @@ func toVO(m *model.Registry) registryVO {
 		HasPassword:    m.PasswordEnc != "",
 		Insecure:       m.Insecure,
 		DefaultProject: m.DefaultProject,
+		InSourceGroup:  m.InSourceGroup,
 	}
 }
 

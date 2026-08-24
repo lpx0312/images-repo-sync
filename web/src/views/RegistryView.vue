@@ -33,6 +33,12 @@
             <span class="cell-muted">{{ row.default_project || '—' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="源镜像组" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.in_source_group" size="small" type="success">已加入</el-tag>
+            <span v-else class="cell-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="用户名" prop="username" width="140">
           <template #default="{ row }">
             <span class="cell-muted">{{ row.username || (row.has_password ? '—' : '匿名') }}</span>
@@ -87,6 +93,12 @@
         </el-form-item>
         <el-form-item label="默认 project">
           <el-input v-model="form.default_project" placeholder="目标模式 flat/preserve_path 的默认 project" />
+        </el-form-item>
+        <el-form-item label="加入源镜像组">
+          <el-switch v-model="form.in_source_group" />
+          <span class="form-tip" style="margin-left: 12px">
+            开启后,粘贴镜像列表创建任务时按地址主机名自动匹配该仓库的凭证
+          </span>
         </el-form-item>
         <el-form-item label="跳过 TLS">
           <el-switch v-model="form.insecure" />
@@ -143,6 +155,7 @@ const form = reactive({
   password: '',
   default_project: '',
   insecure: false,
+  in_source_group: false,
 })
 
 const rules = {
@@ -154,7 +167,7 @@ function openCreate() {
   editing.value = null
   Object.assign(form, {
     name: '', host: '', type: 'generic',
-    username: '', password: '', default_project: '', insecure: false,
+    username: '', password: '', default_project: '', insecure: false, in_source_group: false,
   })
   drawerVisible.value = true
 }
@@ -169,6 +182,7 @@ function openEdit(row) {
     password: '',
     default_project: row.default_project || '',
     insecure: !!row.insecure,
+    in_source_group: !!row.in_source_group,
   })
   drawerVisible.value = true
 }

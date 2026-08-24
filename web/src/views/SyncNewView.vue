@@ -15,7 +15,8 @@
       <!-- Step 1: 选源 -->
       <div v-show="step === 0" class="step-body">
         <el-form label-width="120px">
-          <el-form-item label="源仓库" required>
+          <!-- 浏览目录模式才需要手动选源仓库;粘贴列表按镜像地址自动匹配 -->
+          <el-form-item v-if="pickTab === 'catalog'" label="源仓库" required>
             <el-select
               v-model="form.sourceRegistryId"
               placeholder="选择源仓库"
@@ -24,12 +25,19 @@
               @change="onSourceChange"
             >
               <el-option
-                v-for="r in sourceRegistries"
+                v-for="r in allRegistries"
                 :key="r.id"
                 :label="`${r.name} (${r.host})`"
                 :value="r.id"
               />
             </el-select>
+          </el-form-item>
+          <el-form-item v-else label="源仓库">
+            <el-alert type="info" :closable="false" class="auto-source-tip">
+              <template #title>自动匹配:按镜像地址的主机名匹配「源镜像组」仓库凭证</template>
+              粘贴的镜像地址带哪个仓库的主机名,就用哪个仓库(需在「仓库管理」开启「加入源镜像组」)。
+              不带主机名的镜像(如 nginx:1.25)视为 docker.io:有配置则用配置,无配置时匿名拉取公开镜像。
+            </el-alert>
           </el-form-item>
         </el-form>
 
@@ -44,7 +52,6 @@
             />
             <div class="form-tip">支持隐式 docker.io；官方镜像会自动补 library/ 前缀。每行一条，空行忽略。</div>
           </el-tab-pane>
-
           <el-tab-pane label="浏览目录" name="catalog" :disabled="!canBrowse">
             <CatalogBrowser
               v-if="form.sourceRegistryId && canBrowse"
@@ -71,25 +78,27 @@
         <el-form label-width="120px">
           <el-form-item label="目标仓库" required>
             <el-select
-              v-model="form.targetRegistryId"
-              placeholder="选择目标仓库"
+              v-model="form.targetRegistryIds"
+              placeholder="选择一个或多个目标仓库"
               filterable
-              style="width: 360px"
+              multiple
+              style="width: 480px"
               @change="onTargetChange"
             >
               <el-option
-                v-for="r in targetRegistries"
+                v-for="r in allRegistries"
                 :key="r.id"
                 :label="`${r.name} (${r.host})`"
                 :value="r.id"
               />
             </el-select>
+            <div class="form-tip">可多选;所有目标共用同一套模式 / project / 架构,逐个目标串行推送。</div>
           </el-form-item>
 
           <el-form-item label="目标 project">
-            <!-- Harbor: 拉取已有 project 列表做下拉,可搜索 + 允许手输新 project -->
+            <!-- 单一 Harbor 目标: 拉取已有 project 列表做下拉,可搜索 + 允许手输新 project -->
             <el-select
-              v-if="targetRegistryType === 'harbor'"
+              v-if="singleHarborTarget"
               v-model="form.targetProject"
               placeholder="选择或输入 project"
               filterable
@@ -106,7 +115,7 @@
                 :value="p"
               />
             </el-select>
-            <!-- 非 Harbor(ACR/generic 等): 无法可靠列 namespace,纯手输 -->
+            <!-- 其他情况(多目标 / 非 Harbor): 纯手输 -->
             <el-input
               v-else
               v-model="form.targetProject"
@@ -117,9 +126,9 @@
             <div class="form-tip">
               <template v-if="form.mode === 'replace_host'">模式 ③ 不需要目标 project</template>
               <template v-else>
-                模式 ①② 需要；
-                <span v-if="targetRegistryType === 'harbor'">可从下拉选或手输新的 project</span>
-                <span v-else>手输(ACR 即 namespace);留空时用默认「{{ targetRegistry?.default_project || '未设置' }}」</span>
+                模式 ①② 需要,所有目标共用;
+                <span v-if="singleHarborTarget">可从下拉选或手输新的 project</span>
+                <span v-else>手输;留空时使用所有目标仓库一致的默认 project(当前:{{ sharedDefaultProject || '未设置' }})</span>
               </template>
             </div>
           </el-form-item>
@@ -139,7 +148,7 @@
             <ModePreview
               v-model="form.mode"
               :example="exampleRef"
-              :target-host="targetRegistry?.host || ''"
+              :target-host="firstTarget?.host || ''"
               :project="effectiveProject"
             />
           </el-form-item>
@@ -154,24 +163,34 @@
       <!-- Step 3: 预览 -->
       <div v-show="step === 2" class="step-body">
         <el-descriptions :column="2" border size="small" class="summary">
-          <el-descriptions-item label="源仓库">{{ sourceRegistry?.name }}</el-descriptions-item>
-          <el-descriptions-item label="目标仓库">{{ targetRegistry?.name }}</el-descriptions-item>
+          <el-descriptions-item label="源仓库">
+            {{ pickTab === 'catalog' ? (sourceRegistry?.name || '—') : '自动匹配(按镜像地址主机名)' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="目标仓库">
+            {{ selectedTargets.map((r) => r.name).join('、') || '—' }}
+            <el-tag v-if="selectedTargets.length > 1" size="small" style="margin-left: 6px">{{ selectedTargets.length }} 个</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="模式">{{ modeLabel(form.mode) }}</el-descriptions-item>
           <el-descriptions-item label="目标架构">{{ archLabel(form.arch) }}</el-descriptions-item>
           <el-descriptions-item label="目标 project">{{ form.mode === 'replace_host' ? '—' : (effectiveProject || '未设置') }}</el-descriptions-item>
-          <el-descriptions-item label="镜像数量">{{ refsForNext.length }}</el-descriptions-item>
+          <el-descriptions-item label="明细数量">{{ mappingRows.length }} 条({{ refsForNext.length }} 个镜像 × {{ selectedTargets.length }} 个目标)</el-descriptions-item>
         </el-descriptions>
 
         <div class="mapping-card">
           <div class="mapping-title">同步映射（源 → 目标）</div>
           <el-table :data="mappingRows" size="small" max-height="360" border>
             <el-table-column type="index" label="#" width="50" />
-            <el-table-column label="源镜像" min-width="280">
+            <el-table-column label="目标仓库" width="140">
+              <template #default="{ row }">
+                <span>{{ row.targetName }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="源镜像" min-width="260">
               <template #default="{ row }">
                 <span class="cell-mono">{{ row.src }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="目标镜像" min-width="280">
+            <el-table-column label="目标镜像" min-width="260">
               <template #default="{ row }">
                 <span class="cell-mono dst">{{ row.dst }}</span>
               </template>
@@ -204,14 +223,12 @@ const router = useRouter()
 const step = ref(0)
 const pickTab = ref('list')
 
-// 仓库不再分角色(源/目标在每次同步时选择),源和目标共用同一个列表。
+// 仓库不分角色,源/目标共用同一个列表。
 const allRegistries = ref([])
-const sourceRegistries = allRegistries
-const targetRegistries = allRegistries
 
 const form = reactive({
-  sourceRegistryId: null,
-  targetRegistryId: null,
+  sourceRegistryId: null, // 仅浏览目录模式使用
+  targetRegistryIds: [],  // 多目标
   mode: 'flat',
   targetProject: '',
   arch: 'amd64',
@@ -220,13 +237,18 @@ const form = reactive({
 const rawList = ref('')
 const pickedRefs = ref([])
 
-// 目标 project 候选(Harbor 类型才拉取)。
+// 目标 project 候选(单一 Harbor 目标才拉取)。
 const projectOptions = ref([])
 const loadingProjects = ref(false)
 
 const sourceRegistry = computed(() => allRegistries.value.find((r) => r.id === form.sourceRegistryId))
-const targetRegistry = computed(() => allRegistries.value.find((r) => r.id === form.targetRegistryId))
-const targetRegistryType = computed(() => (targetRegistry.value?.type || '').toLowerCase())
+const selectedTargets = computed(() =>
+  allRegistries.value.filter((r) => form.targetRegistryIds.includes(r.id))
+)
+const firstTarget = computed(() => selectedTargets.value[0])
+const singleHarborTarget = computed(
+  () => selectedTargets.value.length === 1 && (selectedTargets.value[0]?.type || '').toLowerCase() === 'harbor'
+)
 
 // 浏览目录仅支持 Harbor 与通用 Registry:
 // Harbor 走 v2 API 列 project/repo,通用 Registry 走 _catalog;
@@ -247,7 +269,7 @@ const listRefs = computed(() =>
     .filter(Boolean)
 )
 
-// 合并粘贴 + 浏览两个来源的引用(去重)。
+// 当前 tab 选择的引用(去重)。
 const refsForNext = computed(() => {
   const set = new Set()
   const all = pickTab.value === 'list' ? listRefs.value : pickedRefs.value
@@ -257,22 +279,36 @@ const refsForNext = computed(() => {
 
 const exampleRef = computed(() => refsForNext.value[0] || 'gcr.io/k8s-staging/cluster-api/clusterctl:v1')
 
+// 所有选中目标的默认 project 一致时取该值,否则为空。
+const sharedDefaultProject = computed(() => {
+  const ts = selectedTargets.value
+  if (!ts.length) return ''
+  const first = ts[0].default_project || ''
+  return ts.every((t) => (t.default_project || '') === first) ? first : ''
+})
+
 const defaultProjectHint = computed(() =>
-  targetRegistry.value?.default_project ? `默认 ${targetRegistry.value.default_project}` : '请输入'
+  sharedDefaultProject.value ? `默认 ${sharedDefaultProject.value}` : '请输入'
 )
-const effectiveProject = computed(() => form.targetProject || targetRegistry.value?.default_project || '')
+const effectiveProject = computed(() => form.targetProject || sharedDefaultProject.value)
 
 const canStep2Next = computed(() => {
-  if (!form.targetRegistryId) return false
+  if (!form.targetRegistryIds.length) return false
   if (form.mode !== MODE_REPLACE_HOST && !effectiveProject.value) return false
   return true
 })
 
-// 计算映射预览表(前端复刻后端解析逻辑)。
+// 计算映射预览表(前端复刻后端解析逻辑):镜像 × 目标。
 const mappingRows = computed(() => {
   const rows = []
   for (const src of refsForNext.value) {
-    rows.push({ src, dst: resolveTarget(src, targetRegistry.value?.host || '', form.mode, effectiveProject.value) })
+    for (const t of selectedTargets.value) {
+      rows.push({
+        src,
+        dst: resolveTarget(src, t.host || '', form.mode, effectiveProject.value),
+        targetName: t.name,
+      })
+    }
   }
   return rows
 })
@@ -289,7 +325,7 @@ function onSourceChange() {
   pickedRefs.value = []
 }
 
-// 选目标仓库:重置 project 选项,Harbor 类型拉取 project 列表,默认填入 registry.default_project。
+// 目标变化:重置 project;单一 Harbor 目标拉取 project 列表,否则预填一致默认值。
 function onTargetChange() {
   form.targetProject = ''
   projectOptions.value = []
@@ -297,13 +333,15 @@ function onTargetChange() {
 }
 
 async function loadProjectOptions() {
-  const reg = targetRegistry.value
+  const reg = firstTarget.value
   if (!reg) return
-  // 默认值:无论哪种类型都先用 registry 的 default_project 兜底。
-  form.targetProject = reg.default_project || ''
-  if (targetRegistryType.value !== 'harbor') {
-    return // 非 Harbor 不拉列表,走纯手输。
+  // 多目标:预填所有目标一致的默认 project(不一致则留空由用户手输)。
+  if (!singleHarborTarget.value) {
+    form.targetProject = sharedDefaultProject.value
+    return
   }
+  // 单一 Harbor 目标:默认值兜底 + 拉取 project 列表。
+  form.targetProject = reg.default_project || ''
   loadingProjects.value = true
   try {
     const res = await catalogAPI.projects(reg.id)
@@ -322,10 +360,11 @@ async function onSubmit() {
   submitting.value = true
   try {
     const res = await taskAPI.create({
-      source_registry_id: form.sourceRegistryId,
-      target_registry_id: form.targetRegistryId,
+      // 浏览目录模式传显式源仓库;粘贴列表模式传 0 表示按主机名自动匹配。
+      source_registry_id: pickTab.value === 'catalog' ? form.sourceRegistryId : 0,
+      target_registry_ids: form.targetRegistryIds,
       mode: form.mode,
-      target_project: form.targetProject,
+      target_project: effectiveProject.value,
       arch: form.arch,
       refs: refsForNext.value,
     })
@@ -339,7 +378,6 @@ async function onSubmit() {
 const submitting = ref(false)
 
 onMounted(async () => {
-  // 仓库不分角色,源/目标共用同一列表。
   const res = await registryAPI.list()
   allRegistries.value = res.data ?? res
   // 读取系统设置的默认架构,作为架构单选的初值。
@@ -372,6 +410,8 @@ onMounted(async () => {
 .steps { margin-bottom: var(--space-xl); }
 .step-body { min-height: 320px; }
 .pick-tabs { margin-top: var(--space-md); }
+.auto-source-tip { padding: 8px 12px; }
+.auto-source-tip :deep(.el-alert__description) { font-size: 12px; margin-top: 2px; }
 .mono-area :deep(textarea) { font-family: var(--font-mono); font-size: 13px; }
 .form-tip { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; }
 .step-footer {

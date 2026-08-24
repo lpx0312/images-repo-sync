@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,21 +26,33 @@ type TaskHandler struct {
 func NewTaskHandler(db *gorm.DB) *TaskHandler { return &TaskHandler{DB: db} }
 
 // createTaskRequest 创建任务的请求体。
+//
+// SourceRegistryID 为 0 表示「自动匹配源」:按每条镜像地址的主机名到
+// 「源镜像组」(InSourceGroup=true 的仓库)里匹配凭证;docker.io 无匹配时匿名拉取。
+// 浏览目录模式必须显式指定 SourceRegistryID。
+// TargetRegistryIDs 支持多目标(1..10),所有目标共用模式/project/架构。
 type createTaskRequest struct {
-	SourceRegistryID uint     `json:"source_registry_id" binding:"required"`
-	TargetRegistryID uint     `json:"target_registry_id" binding:"required"`
-	Mode             string   `json:"mode" binding:"required"`
-	TargetProject    string   `json:"target_project"`
-	Arch             string   `json:"arch"` // amd64 / arm64 / all;空按 amd64
-	Refs             []string `json:"refs" binding:"required"`
+	SourceRegistryID  uint     `json:"source_registry_id"`
+	TargetRegistryIDs []uint   `json:"target_registry_ids" binding:"required"`
+	Mode              string   `json:"mode" binding:"required"`
+	TargetProject     string   `json:"target_project"`
+	Arch              string   `json:"arch"` // amd64 / arm64 / all;空按 amd64
+	Refs              []string `json:"refs" binding:"required"`
 }
 
 // maxRefsPerTask 限制单任务镜像条数,防止误粘贴超大清单把任务明细撑爆。
 const maxRefsPerTask = 500
 
+// 目标数量与「镜像 × 目标」展开后的明细总数上限。
+const (
+	maxTargetsPerTask = 10
+	maxItemsPerTask   = 2000
+)
+
 // Create POST /api/tasks
 //
-// 校验源/目标仓库存在 → 按模式解析每条 ref → 落库任务和明细 → 入队执行。
+// 校验源/目标仓库 → 按模式解析每条 ref(自动匹配模式下按主机名分配源凭证)
+// → 展开为「镜像 × 目标」明细落库 → 入队执行。
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req createTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -55,19 +68,32 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// 校验源/目标仓库存在,并取目标 host 用于解析。
-	var src, dst model.Registry
-	if err := h.DB.First(&src, req.SourceRegistryID).Error; err != nil {
-		badReq(c, "源仓库不存在")
+	// 校验目标仓库(去重 + 限量)。
+	targetIDs := make([]uint, 0, len(req.TargetRegistryIDs))
+	seenTarget := make(map[uint]bool)
+	for _, id := range req.TargetRegistryIDs {
+		if id == 0 || seenTarget[id] {
+			continue
+		}
+		seenTarget[id] = true
+		targetIDs = append(targetIDs, id)
+	}
+	if len(targetIDs) == 0 {
+		badReq(c, "请至少选择一个目标仓库")
 		return
 	}
-	if err := h.DB.First(&dst, req.TargetRegistryID).Error; err != nil {
-		badReq(c, "目标仓库不存在")
+	if len(targetIDs) > maxTargetsPerTask {
+		badReq(c, fmt.Sprintf("单次任务最多 %d 个目标仓库", maxTargetsPerTask))
 		return
 	}
-	if req.SourceRegistryID == req.TargetRegistryID {
-		badReq(c, "源和目标仓库不能相同")
-		return
+	targets := make([]model.Registry, 0, len(targetIDs))
+	for _, id := range targetIDs {
+		var dst model.Registry
+		if err := h.DB.First(&dst, id).Error; err != nil {
+			badReq(c, fmt.Sprintf("目标仓库 #%d 不存在", id))
+			return
+		}
+		targets = append(targets, dst)
 	}
 
 	// 校验架构取值,空值默认 amd64。
@@ -82,42 +108,102 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// 解析每条 ref 的目标引用。
-	project := req.TargetProject
-	if project == "" {
-		project = dst.DefaultProject
+	// 解析源:显式指定(浏览目录)或按主机名自动匹配源镜像组。
+	type refSource struct {
+		sourceID uint   // 匹配到的源仓库 ID;0 表示匿名
+		host     string // 匿名时的仓库主机名(目前仅 docker.io)
 	}
-	type parsedItem struct {
-		SourceRef string
-		TargetRef string
-	}
-	items := make([]parsedItem, 0, len(req.Refs))
-	seen := make(map[string]bool, len(req.Refs))
+
+	// 先把 refs 规整为去重后的有序列表,源解析结果按 ref 缓存。
+	uniqueRefs := make([]string, 0, len(req.Refs))
+	seenRef := make(map[string]bool, len(req.Refs))
 	for _, ref := range req.Refs {
 		ref = strings.TrimSpace(ref)
-		if ref == "" {
+		if ref == "" || seenRef[ref] {
 			continue
 		}
-		target, err := skopeo.ResolveTarget(ref, dst.Host, req.Mode, project)
-		if err != nil {
-			badReq(c, fmt.Sprintf("解析镜像 %q 失败: %v", ref, err))
+		seenRef[ref] = true
+		uniqueRefs = append(uniqueRefs, ref)
+	}
+
+	refSources := make(map[string]refSource, len(uniqueRefs))
+	if req.SourceRegistryID > 0 {
+		var src model.Registry
+		if err := h.DB.First(&src, req.SourceRegistryID).Error; err != nil {
+			badReq(c, "源仓库不存在")
 			return
 		}
-		if seen[target] {
-			continue // 去重
+		if seenTarget[req.SourceRegistryID] {
+			badReq(c, "源和目标仓库不能相同")
+			return
 		}
-		seen[target] = true
-		items = append(items, parsedItem{SourceRef: ref, TargetRef: target})
+		for _, ref := range uniqueRefs {
+			refSources[ref] = refSource{sourceID: req.SourceRegistryID}
+		}
+	} else {
+		srcMap, missing := h.matchSourceGroup(uniqueRefs)
+		if len(missing) > 0 {
+			badReq(c, "以下镜像仓库未加入源镜像组,请在「仓库管理」中开启: "+strings.Join(missing, "、"))
+			return
+		}
+		for _, ref := range uniqueRefs {
+			host, _ := skopeo.ParseSource(ref)
+			rs := refSource{}
+			if id, ok := srcMap[strings.ToLower(host)]; ok {
+				if seenTarget[id] {
+					badReq(c, fmt.Sprintf("镜像 %q 的源仓库与目标仓库相同,请调整", ref))
+					return
+				}
+				rs.sourceID = id
+			} else {
+				// 匹配不到且是 docker.io → 匿名拉取公开镜像。
+				rs.host = host
+			}
+			refSources[ref] = rs
+		}
+	}
+
+	// 目标 project:多目标共用一套。模式①②必填(不再回退单个目标的默认值,避免歧义)。
+	project := strings.TrimSpace(req.TargetProject)
+	if req.Mode != model.ModeReplaceHost && project == "" {
+		badReq(c, "该同步模式需要指定目标 project")
+		return
+	}
+
+	// 展开「镜像 × 目标」明细(目标内层,同一镜像的各目标明细相邻;
+	// runner 按目标分组串行执行,顺序无关紧要)。
+	type parsedItem struct {
+		sourceID uint
+		host     string
+		targetID uint
+		src, dst string
+	}
+	items := make([]parsedItem, 0, len(uniqueRefs)*len(targets))
+	for _, ref := range uniqueRefs {
+		rs := refSources[ref]
+		for ti := range targets {
+			target, err := skopeo.ResolveTarget(ref, targets[ti].Host, req.Mode, project)
+			if err != nil {
+				badReq(c, fmt.Sprintf("解析镜像 %q 失败: %v", ref, err))
+				return
+			}
+			items = append(items, parsedItem{sourceID: rs.sourceID, host: rs.host, targetID: targets[ti].ID, src: ref, dst: target})
+		}
 	}
 	if len(items) == 0 {
 		badReq(c, "没有有效的镜像")
 		return
 	}
+	if len(items) > maxItemsPerTask {
+		badReq(c, fmt.Sprintf("展开为 %d 条明细,超过单次 %d 条上限,请减少镜像或目标数量", len(items), maxItemsPerTask))
+		return
+	}
 
-	// 落库。
+	// 落库。任务级 Source/Target 保留:浏览目录模式为真实值;
+	// 自动匹配模式 Source=0,Target=第一个目标(旧明细回退与列表展示兼容)。
 	t := &model.SyncTask{
 		SourceRegistryID: req.SourceRegistryID,
-		TargetRegistryID: req.TargetRegistryID,
+		TargetRegistryID: targetIDs[0],
 		Mode:             req.Mode,
 		TargetProject:    project,
 		Arch:             arch,
@@ -127,9 +213,12 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 	for _, it := range items {
 		t.Items = append(t.Items, model.SyncTaskItem{
-			SourceRef: it.SourceRef,
-			TargetRef: it.TargetRef,
-			Status:    model.ItemStatusPending,
+			SourceRegistryID: it.sourceID,
+			TargetRegistryID: it.targetID,
+			SourceHost:       it.host,
+			SourceRef:        it.src,
+			TargetRef:        it.dst,
+			Status:           model.ItemStatusPending,
 		})
 	}
 	if err := h.DB.Create(t).Error; err != nil {
@@ -142,6 +231,33 @@ func (h *TaskHandler) Create(c *gin.Context) {
 
 	// 返回精简视图(含 items)。
 	ok(c, h.buildTaskVO(t, true))
+}
+
+// matchSourceGroup 提取 refs 中出现的主机名,与「源镜像组」仓库按 host 匹配。
+// 返回 host(小写)-> registryID 映射,以及没有匹配配置且不是 docker.io 的主机名列表。
+func (h *TaskHandler) matchSourceGroup(refs []string) (map[string]uint, []string) {
+	hosts := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if host, _ := skopeo.ParseSource(ref); host != "" {
+			hosts[strings.ToLower(host)] = true
+		}
+	}
+	var group []model.Registry
+	h.DB.Where("in_source_group = ?", true).Find(&group)
+
+	matched := make(map[string]uint, len(group))
+	for i := range group {
+		matched[strings.ToLower(group[i].Host)] = group[i].ID
+	}
+
+	var missing []string
+	for host := range hosts {
+		if _, ok := matched[host]; !ok && host != "docker.io" {
+			missing = append(missing, host)
+		}
+	}
+	sort.Strings(missing)
+	return matched, missing
 }
 
 // List GET /api/tasks?status=&page=&size=
@@ -345,14 +461,17 @@ func (h *TaskHandler) buildTaskVO(t *model.SyncTask, withItems bool) gin.H {
 		itemVOs := make([]gin.H, 0, len(t.Items))
 		for _, it := range t.Items {
 			itemVOs = append(itemVOs, gin.H{
-				"id":          it.ID,
-				"source_ref":  it.SourceRef,
-				"target_ref":  it.TargetRef,
-				"status":      it.Status,
-				"error":       it.Error,
-				"digest":      it.Digest,
-				"started_at":  it.StartedAt,
-				"finished_at": it.FinishedAt,
+				"id":                 it.ID,
+				"source_registry_id": it.SourceRegistryID,
+				"target_registry_id": it.TargetRegistryID,
+				"source_host":        it.SourceHost,
+				"source_ref":         it.SourceRef,
+				"target_ref":         it.TargetRef,
+				"status":             it.Status,
+				"error":              it.Error,
+				"digest":             it.Digest,
+				"started_at":         it.StartedAt,
+				"finished_at":        it.FinishedAt,
 			})
 		}
 		vo["items"] = itemVOs

@@ -34,32 +34,43 @@
       <div class="dual-pane">
         <div class="pane">
           <div class="pane-title">镜像明细</div>
-          <el-table :data="items" size="small" max-height="420" border>
-            <el-table-column label="源镜像" min-width="220">
-              <template #default="{ row }">
-                <span class="cell-mono">{{ row.source_ref }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="目标镜像" min-width="240">
-              <template #default="{ row }">
-                <span class="cell-mono dst">{{ row.target_ref }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag size="small" :type="itemStatusType(row.status)">{{ itemStatusLabel(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="信息" min-width="160">
-              <template #default="{ row }">
-                <el-tooltip v-if="row.error" :content="row.error" placement="top">
-                  <span class="cell-muted ellipsis">{{ row.error }}</span>
-                </el-tooltip>
-                <span v-else-if="row.digest" class="cell-muted ellipsis">{{ row.digest.slice(0, 19) }}…</span>
-                <span v-else class="cell-muted">—</span>
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="target-groups">
+            <div v-for="g in groupedItems" :key="g.key" class="target-group">
+              <div class="group-header">
+                <span class="group-name">{{ g.label }}</span>
+                <span class="group-stats">
+                  {{ g.stats.success }} 成功 / {{ g.stats.failed }} 失败 / {{ g.stats.total }} 条
+                </span>
+              </div>
+              <el-table :data="g.items" size="small" border>
+                <el-table-column label="源镜像" min-width="200">
+                  <template #default="{ row }">
+                    <span class="cell-mono">{{ row.source_ref }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="目标镜像" min-width="200">
+                  <template #default="{ row }">
+                    <span class="cell-mono dst">{{ row.target_ref }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="80">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="itemStatusType(row.status)">{{ itemStatusLabel(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="信息" min-width="120">
+                  <template #default="{ row }">
+                    <el-tooltip v-if="row.error" :content="row.error" placement="top">
+                      <span class="cell-muted ellipsis">{{ row.error }}</span>
+                    </el-tooltip>
+                    <span v-else-if="row.digest" class="cell-muted ellipsis">{{ row.digest.slice(0, 19) }}…</span>
+                    <span v-else class="cell-muted">—</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <div v-if="!groupedItems.length" class="log-empty" style="color: var(--color-text-muted)">暂无明细</div>
+          </div>
         </div>
 
         <div class="pane">
@@ -84,7 +95,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Back, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { taskAPI } from '@/api'
+import { taskAPI, registryAPI } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import dayjs from 'dayjs'
 
@@ -98,6 +109,7 @@ const task = reactive({
   mode: '', arch: '', target_project: '', started_at: null, finished_at: null,
 })
 const items = ref([])
+const registryNames = ref({}) // registryID -> 名称(分组标题用)
 const logs = ref([])
 const autoScroll = ref(true)
 const logBox = ref(null)
@@ -115,6 +127,34 @@ const progressStatus = computed(() => {
   return ''
 })
 const canCancel = computed(() => task.status === 'running' || task.status === 'pending')
+
+// 明细按目标仓库分组(多目标任务一组一个目标;单目标任务也只有一组)。
+// target_registry_id 为 0 的旧数据回退任务级 target_registry_id。
+const groupedItems = computed(() => {
+  const groups = []
+  const index = new Map()
+  for (const it of items.value) {
+    const tid = it.target_registry_id || task.target_registry_id || 0
+    if (!index.has(tid)) {
+      const first = items.value.find((x) => (x.target_registry_id || task.target_registry_id || 0) === tid)
+      const host = (first?.target_ref || '').split('/')[0] || '—'
+      const g = {
+        key: tid,
+        label: registryNames.value[tid] ? `${registryNames.value[tid]} (${host})` : `目标 ${host}`,
+        items: [],
+        stats: { total: 0, success: 0, failed: 0 },
+      }
+      index.set(tid, g)
+      groups.push(g)
+    }
+    const g = index.get(tid)
+    g.items.push(it)
+    g.stats.total++
+    if (it.status === 'success') g.stats.success++
+    else if (it.status === 'failed') g.stats.failed++
+  }
+  return groups
+})
 
 async function reload() {
   const res = await taskAPI.get(taskId)
@@ -295,6 +335,14 @@ function itemStatusLabel(s) {
 onMounted(async () => {
   await reload()
   startStream()
+  // 仓库名称映射(分组标题展示用);拉取失败时分组标题回退显示目标 host。
+  try {
+    const res = await registryAPI.list()
+    const list = res.data ?? res ?? []
+    const m = {}
+    for (const r of list) m[r.id] = r.name
+    registryNames.value = m
+  } catch { /* 忽略 */ }
 })
 onUnmounted(() => {
   stopStream()
@@ -357,6 +405,17 @@ onUnmounted(() => {
   justify-content: space-between;
 }
 .cell-mono { font-family: var(--font-mono); font-size: 11.5px; word-break: break-all; }
+.target-groups { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-md); }
+.target-group { display: flex; flex-direction: column; gap: var(--space-xs); }
+.group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 2px 4px;
+}
+.group-name { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.group-stats { font-size: 12px; color: var(--color-text-muted); white-space: nowrap; }
 .cell-mono.dst { color: var(--color-primary); }
 .cell-muted { color: var(--color-text-muted); font-size: 11.5px; }
 .ellipsis { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

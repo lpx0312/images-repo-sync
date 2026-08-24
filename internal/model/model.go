@@ -70,6 +70,8 @@ func (User) TableName() string { return "users" }
 // Registry 是源/目标仓库配置。一个 registry 对应一组(host, 用户名, 密码)。
 // 仓库本身不分角色(源/目标在每次同步任务时选择),也不绑定 project
 // (DefaultProject 仅作为 ACR 等无法列 namespace 仓库的输入兜底默认值)。
+// InSourceGroup 标记加入「源镜像组」:粘贴列表创建任务时,按镜像地址的主机名
+// 到这组仓库里匹配源凭证(见 task.Create 的自动匹配逻辑)。
 type Registry struct {
 	ID             uint      `json:"id" gorm:"primaryKey"`
 	Name           string    `json:"name" gorm:"type:varchar(100);uniqueIndex;not null"`
@@ -79,6 +81,7 @@ type Registry struct {
 	PasswordEnc    string    `json:"-" gorm:"column:password_enc;type:varchar(512)"`
 	Insecure       bool      `json:"insecure" gorm:"default:false"`
 	DefaultProject string    `json:"default_project" gorm:"type:varchar(255)"`
+	InSourceGroup  bool      `json:"in_source_group" gorm:"default:false"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -109,17 +112,23 @@ type SyncTask struct {
 func (SyncTask) TableName() string { return "sync_tasks" }
 
 // SyncTaskItem 是任务中的一条镜像同步明细。
+// 多目标/自动匹配源的任务在创建时就把每条明细展开为「镜像 × 目标」并记录各自的
+// 源/目标仓库 ID;两列为 0 且 SourceHost 为空时表示沿用任务级字段(旧数据兼容)。
+// SourceHost 非空表示该条源为匿名仓库(目前仅 docker.io 公开镜像,无需凭证)。
 type SyncTaskItem struct {
-	ID         uint       `json:"id" gorm:"primaryKey"`
-	TaskID     uint       `json:"task_id" gorm:"not null;index"`
-	SourceRef  string     `json:"source_ref" gorm:"type:varchar(512);not null"`
-	TargetRef  string     `json:"target_ref" gorm:"type:varchar(512);not null"`
-	Status     string     `json:"status" gorm:"type:varchar(20);default:'pending'"`
-	Error      string     `json:"error" gorm:"type:text"`
-	Digest     string     `json:"digest" gorm:"type:varchar(255)"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at"`
+	ID               uint       `json:"id" gorm:"primaryKey"`
+	TaskID           uint       `json:"task_id" gorm:"not null;index"`
+	SourceRegistryID uint       `json:"source_registry_id" gorm:"default:0"`
+	TargetRegistryID uint       `json:"target_registry_id" gorm:"default:0"`
+	SourceHost       string     `json:"source_host" gorm:"type:varchar(255)"`
+	SourceRef        string     `json:"source_ref" gorm:"type:varchar(512);not null"`
+	TargetRef        string     `json:"target_ref" gorm:"type:varchar(512);not null"`
+	Status           string     `json:"status" gorm:"type:varchar(20);default:'pending'"`
+	Error            string     `json:"error" gorm:"type:text"`
+	Digest           string     `json:"digest" gorm:"type:varchar(255)"`
+	CreatedAt        time.Time  `json:"created_at"`
+	StartedAt        *time.Time `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
 }
 
 func (SyncTaskItem) TableName() string { return "sync_task_items" }
