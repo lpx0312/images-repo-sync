@@ -115,10 +115,15 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 
 	// 先把 refs 规整为去重后的有序列表,源解析结果按 ref 缓存。
+	// 规整化:剥掉 docker:// 与 http(s):// 前缀(http:// 仅用于标识明文 HTTP 仓库,
+	// skopeo 对 --tls-verify=false 的 HTTP registry 会自动回退,引用本身不能带 scheme)。
 	uniqueRefs := make([]string, 0, len(req.Refs))
 	seenRef := make(map[string]bool, len(req.Refs))
 	for _, ref := range req.Refs {
 		ref = strings.TrimSpace(ref)
+		ref = strings.TrimPrefix(ref, "docker://")
+		ref = strings.TrimPrefix(ref, "https://")
+		ref = strings.TrimPrefix(ref, "http://")
 		if ref == "" || seenRef[ref] {
 			continue
 		}
@@ -235,6 +240,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 
 // matchSourceGroup 提取 refs 中出现的主机名,与「源镜像组」仓库按 host 匹配。
 // 返回 host(小写)-> registryID 映射,以及没有匹配配置且不是 docker.io 的主机名列表。
+// 匹配键统一剥掉 http(s):// 前缀(仓库配置可能带 scheme 标识明文 HTTP)。
 func (h *TaskHandler) matchSourceGroup(refs []string) (map[string]uint, []string) {
 	hosts := make(map[string]bool, len(refs))
 	for _, ref := range refs {
@@ -247,7 +253,7 @@ func (h *TaskHandler) matchSourceGroup(refs []string) (map[string]uint, []string
 
 	matched := make(map[string]uint, len(group))
 	for i := range group {
-		matched[strings.ToLower(group[i].Host)] = group[i].ID
+		matched[strings.ToLower(skopeo.StripScheme(group[i].Host))] = group[i].ID
 	}
 
 	var missing []string
@@ -330,11 +336,16 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 // 先订阅再查库:若任务恰好在「查快照」与「订阅」两步之间结束,结束事件已广播完,
 // 后订阅的客户端将永远收不到 task_finished;先订阅则该窗口内的事件进缓冲,
 // 快照也会反映终态,两条路径都能正确收尾。客户端断开时自动清理订阅。
+//
+// 运行中任务:SSE 重连(如页面刷新)时,先回放 Manager 内存中的事件历史
+// (任务开始、逐条进度日志、已完成条目的结果),再转发实时事件——
+// 否则刷新后实时日志清空,只能看到新产生的事件。
+// 已结束任务:历史已随任务结束清除,改从数据库回放明细(携带真实时间)。
 func (h *TaskHandler) Stream(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 
-	// 1. 先订阅,消除与任务结束广播之间的竞态。
-	subID, ch := task.Instance().Subscribe(uint(id))
+	// 1. 先订阅,消除与任务结束广播之间的竞态;同时取走历史事件快照。
+	subID, ch, hist := task.Instance().Subscribe(uint(id))
 	defer task.Instance().Unsubscribe(uint(id), subID)
 
 	var t model.SyncTask
@@ -412,7 +423,13 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 		return
 	}
 
-	// 2. 转发实时事件直到任务结束。
+	// 2. 运行中任务:回放历史事件(任务开始以来已广播的全部事件,含真实时间),
+	// 让刷新后重连的客户端续上实时日志,再进入实时转发。
+	for _, ev := range hist {
+		writeSSE(ev)
+	}
+
+	// 3. 转发实时事件直到任务结束。
 	// 心跳与事件共用同一 select,避免 goroutine 并发写 c.Writer 导致 SSE 帧损坏。
 	// (Gin ResponseWriter 非并发安全,两个 goroutine 交错 Fprintf 会让客户端 JSON 解析失败。)
 	ticker := time.NewTicker(15 * time.Second)

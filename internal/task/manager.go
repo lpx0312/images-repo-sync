@@ -33,18 +33,26 @@ type Event struct {
 	Time      time.Time `json:"time"`
 }
 
+// maxHistoryPerTask 单个任务保留的事件历史上限,超出后丢弃最早的事件。
+// 与前端日志行数上限(2000)对齐;每条事件几百字节,内存可控。
+const maxHistoryPerTask = 2000
+
 // Manager 负责任务的入队执行与 SSE 广播。
 //
 // 设计:
 //   - tasks 队列是带缓冲 channel,若干 worker goroutine 消费(数量由 TASK_CONCURRENCY 配置,
 //     默认 1 串行;skopeo 受 IO 限制,并发过大收益有限)。
 //   - subscribers 按 taskID 维护一组 channel,任务执行时向所有订阅者广播 Event。
+//   - history 按 taskID 保留已广播事件的副本(仅任务执行期间):
+//     任务运行中页面刷新会重连 SSE,新订阅者需要先拿到此前的事件才能续上日志,
+//     否则实时日志清空。任务结束时清除(已结束任务的日志由 API 从数据库回放)。
 //   - 取消通过 cancel context 实现:Manager 记录每个运行中任务的 cancel func。
 type Manager struct {
 	queue       chan uint // 待执行任务 ID 队列
 	mu          sync.Mutex
 	subs        map[uint]map[uint]chan Event // taskID -> subscriberID -> chan
 	cancelFuncs map[uint]context.CancelFunc  // 运行中任务的取消函数
+	history     map[uint][]Event             // taskID -> 已广播事件历史(任务执行期间)
 
 	subIDCounter uint
 }
@@ -61,6 +69,7 @@ func Instance() *Manager {
 			queue:       make(chan uint, 64),
 			subs:        make(map[uint]map[uint]chan Event),
 			cancelFuncs: make(map[uint]context.CancelFunc),
+			history:     make(map[uint][]Event),
 		}
 		// worker 数由 TASK_CONCURRENCY 控制(默认 1 串行,上限 8)。
 		// 单个任务内的镜像仍串行复制;并发只作用于不同任务之间。
@@ -81,9 +90,12 @@ func (m *Manager) Enqueue(taskID uint) {
 	}
 }
 
-// Subscribe 订阅某任务的实时事件流,返回订阅 id 与只读 channel。
+// Subscribe 订阅某任务的实时事件流,返回订阅 id、只读 channel 与当前的历史事件快照。
 // 用完后必须调用 Unsubscribe(taskID, subID) 释放。
-func (m *Manager) Subscribe(taskID uint) (uint, <-chan Event) {
+//
+// 历史快照与订阅注册在同一临界区内完成:注册前的事件在历史里(回放给调用方),
+// 之后的事件进 channel,不重不漏。调用方应先消费历史再消费 channel。
+func (m *Manager) Subscribe(taskID uint) (uint, <-chan Event, []Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -94,7 +106,9 @@ func (m *Manager) Subscribe(taskID uint) (uint, <-chan Event) {
 		m.subs[taskID] = make(map[uint]chan Event)
 	}
 	m.subs[taskID][subID] = ch
-	return subID, ch
+	hist := make([]Event, len(m.history[taskID]))
+	copy(hist, m.history[taskID])
+	return subID, ch, hist
 }
 
 // Unsubscribe 释放订阅。
@@ -112,18 +126,23 @@ func (m *Manager) Unsubscribe(taskID, subID uint) {
 	}
 }
 
-// broadcast 向某任务的所有订阅者广播事件(非阻塞,慢消费者会被跳过)。
+// broadcast 向某任务的所有订阅者广播事件,同时把事件追加进历史,
+// 供任务执行期间新接入的订阅者回放(页面刷新后实时日志不丢)。
+//
+// 发送在锁内进行且为非阻塞(select 带 default,永不会阻塞):
+// 若在锁外发送,会与 Unsubscribe 的 close(ch) 竞态,触发 send on closed channel panic
+// (任务运行中客户端断开 SSE 时即可能发生)。
 func (m *Manager) broadcast(taskID uint, ev Event) {
 	m.mu.Lock()
-	subs := m.subs[taskID]
-	// 复制订阅者列表,避免持锁写 channel。
-	channels := make([]chan Event, 0, len(subs))
-	for _, ch := range subs {
-		channels = append(channels, ch)
+	defer m.mu.Unlock()
+	// 记录历史(环形截断,保留最近 maxHistoryPerTask 条)。
+	h := append(m.history[taskID], ev)
+	if len(h) > maxHistoryPerTask {
+		h = h[len(h)-maxHistoryPerTask:]
 	}
-	m.mu.Unlock()
-
-	for _, ch := range channels {
+	m.history[taskID] = h
+	// 锁内非阻塞发送:与 Unsubscribe 的注册表变更互斥,杜绝向已关闭 channel 发送。
+	for _, ch := range m.subs[taskID] {
 		select {
 		case ch <- ev:
 		default:
@@ -139,11 +158,13 @@ func (m *Manager) RegisterCancel(taskID uint, cancel context.CancelFunc) {
 	m.cancelFuncs[taskID] = cancel
 }
 
-// ClearCancel 清除某任务的取消函数(任务结束)。
+// ClearCancel 清除某任务的取消函数(任务结束),同时清掉事件历史:
+// 任务已结束,后续接入的客户端由 API 从数据库回放日志,内存历史不再需要。
 func (m *Manager) ClearCancel(taskID uint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.cancelFuncs, taskID)
+	delete(m.history, taskID)
 }
 
 // Cancel 取消某运行中任务。返回是否成功发送了取消信号。

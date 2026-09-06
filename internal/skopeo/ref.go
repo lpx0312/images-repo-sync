@@ -29,8 +29,11 @@ func ParseSource(raw string) (host, path string) {
 		return "", ""
 	}
 
-	// 去除可能的 docker:// 前缀。
+	// 去除可能的 docker:// 或 http(s):// 前缀
+	// (http:// 前缀用于标识明文 HTTP registry,host 部分保留 scheme 后的内容)。
 	raw = strings.TrimPrefix(raw, "docker://")
+	raw = strings.TrimPrefix(raw, "https://")
+	raw = strings.TrimPrefix(raw, "http://")
 
 	// 判断第一段是否是 host:第一个 '/' 之前的部分,若含 '.' 或 ':'(端口)或为 localhost 则视为 host。
 	// 若整体不含 '/',说明没有 host 部分(形如 nginx:1.25),host 缺省为 docker.io。
@@ -71,6 +74,15 @@ func isHost(s string) bool {
 	return strings.Contains(s, ".") || strings.Contains(s, ":")
 }
 
+// StripScheme 剥掉 host 配置中的 http(s):// 前缀,返回裸 host。
+// 用于「源镜像组」按主机名匹配(配置里可能带 scheme 标识明文 HTTP)。
+func StripScheme(host string) string {
+	host = strings.TrimSpace(host)
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	return strings.Trim(host, "/")
+}
+
 // tagPart 返回最后一个 '/' 之后的部分(即镜像名:tag)。
 func tagPart(path string) string {
 	if i := strings.LastIndexByte(path, '/'); i >= 0 {
@@ -92,6 +104,9 @@ func ResolveTarget(srcRef, targetHost, mode, project string) (string, error) {
 		return "", fmt.Errorf("无效的源镜像引用: %q", srcRef)
 	}
 	targetHost = strings.TrimRight(strings.TrimSpace(targetHost), "/")
+	// 目标 host 允许带 http(s):// 前缀(标识明文 HTTP registry);引用本身不能带 scheme,
+	// skopeo 对 --dest-tls-verify=false 的 HTTP registry 会自动回退。
+	targetHost = StripScheme(targetHost)
 	project = strings.TrimSpace(project)
 
 	switch mode {

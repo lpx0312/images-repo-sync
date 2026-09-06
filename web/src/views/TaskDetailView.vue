@@ -245,22 +245,22 @@ function applyEvent(eventName, payload) {
       break
     case 'item_started':
       updateItem(payload.item_id, { status: 'running' })
-      pushLog(`▶ ${payload.source_ref} → ${payload.target_ref}`)
+      pushLog(`▶ ${payload.source_ref} → ${payload.target_ref}`, '', payload.time)
       break
     case 'item_progress':
       if (payload.message) pushLog(`   ${payload.message}`, 'muted', payload.time)
       break
     case 'item_success':
       updateItem(payload.item_id, { status: 'success', digest: payload.data?.digest || '' })
-      task.succeeded = (task.succeeded || 0) + 1
+      recountFromItems()
       pushLog(`✓ 成功 ${payload.target_ref}`, 'success', payload.time)
       break
     case 'item_failed':
       updateItem(payload.item_id, { status: payload.message === '已取消' ? 'skipped' : 'failed', error: payload.message })
+      recountFromItems()
       if (payload.message === '已取消') {
-        task.skipped = (task.skipped || 0) + 1
+        pushLog(`✗ 已取消 ${payload.target_ref || payload.source_ref}`, 'muted', payload.time)
       } else {
-        task.failed = (task.failed || 0) + 1
         pushLog(`✗ 失败 ${payload.target_ref || payload.source_ref} — ${payload.message}`, 'error', payload.time)
       }
       break
@@ -283,6 +283,20 @@ function applyEvent(eventName, payload) {
 function updateItem(itemId, patch) {
   const it = items.value.find((x) => x.id === itemId)
   if (it) Object.assign(it, patch)
+}
+
+// 从明细实际状态重算任务计数(替代自增):SSE 历史回放会重复送达已处理过的事件,
+// 自增会把计数翻倍,按明细重算则天然幂等。
+function recountFromItems() {
+  let s = 0, f = 0, k = 0
+  for (const it of items.value) {
+    if (it.status === 'success') s++
+    else if (it.status === 'failed') f++
+    else if (it.status === 'skipped') k++
+  }
+  task.succeeded = s
+  task.failed = f
+  task.skipped = k
 }
 
 function pushLog(text, level = '', ts = null) {

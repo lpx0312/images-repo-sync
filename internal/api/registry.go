@@ -62,12 +62,12 @@ func (d *registryDTO) toModel(existing *model.Registry) (*model.Registry, error)
 	return m, nil
 }
 
-// normalizeHost 清洗用户输入的仓库地址:去掉误填的 http(s):// 前缀与首尾空白/斜杠,
-// 避免拼出 "https://https://host" 之类的非法 URL。仓库一律走 HTTPS(见 registry 包)。
+// normalizeHost 清洗用户输入的仓库地址:去掉首尾空白与斜杠。
+// http:// 前缀保留(明文 HTTP 的私有 registry 场景,probe 与 skopeo 据此选协议);
+// https:// 前缀剥掉(与无前缀等价,一律走 HTTPS),避免拼出 "https://https://host"。
 func normalizeHost(h string) string {
 	h = strings.TrimSpace(h)
 	h = strings.TrimPrefix(h, "https://")
-	h = strings.TrimPrefix(h, "http://")
 	return strings.Trim(h, "/")
 }
 

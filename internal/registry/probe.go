@@ -20,11 +20,16 @@ type ProbeResult struct {
 	Endpoint string `json:"endpoint,omitempty"` // 实际命中的探测端点
 }
 
-// baseURL 返回形如 "https://host[:port]" 的根。
-// 注意:insecure(跳过 TLS 校验)只影响证书验证,不改变协议——registry 一律走 HTTPS。
-// 若 registry 真的是纯 HTTP(无 TLS),应直接在 host 里体现(极少见,这里不支持)。
+// baseURL 返回仓库根地址("http://host[:port]" 或 "https://host[:port]")。
+// 配置的 host 带 http:// 前缀时走明文 HTTP(纯 HTTP 的私有 registry 场景);
+// https:// 或无前缀一律走 HTTPS。insecure 只影响证书校验,不改变协议。
 func baseURL(host string) string {
-	return "https://" + host
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(host, "http://") {
+		return host
+	}
+	host = strings.TrimPrefix(host, "https://")
+	return "https://" + strings.TrimLeft(host, "/")
 }
 
 // doGet 发 GET 请求,返回响应对象(调用方负责 Close body)。
