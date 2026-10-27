@@ -19,7 +19,7 @@
 - catalog 对 `http://` 前缀仓库的 Repos/Tags/Projects 三个接口全部失效(硬编码 https)。
 - chart 上传:multipart 表单临时文件泄漏(大文件每传一次泄一份);upload-paths 无单文件大小上限可单请求 OOM;服务启动清扫 `irs-chart-*` 残留临时目录。
 - skopeo:stdout/stderr 双流回调数据竞争(channel 单消费者串行化,`-race` 验证);单行超 1MB 后管道不再挂死(bufio.Reader 无上限排空);空目标 host、scheme/官方域名大小写等 ref 解析边界。
-- 任务执行:预执行失败(probe/凭证/authfile)时任务计数与明细不一致;终态任务被重复投递会重跑(pending 乐观锁);取消竞态把已完结任务覆盖为 canceled(条件更新);retention 两步删除事务化;worker 数下限保护;DB 目录不可写回退真正生效(写探测)。
+- 任务执行:预执行失败(probe/凭证/authfile)时任务计数与明细不一致;终态任务被重复投递会重跑(pending 乐观锁);取消竞态把已完结任务覆盖为 canceled(条件更新);retention 两步删除事务化;worker 数下限保护;DB 目录不可写回退真正生效(写探测);**后台 worker 晚于 DB 生命周期消费队列时 runTask 空指针崩溃**(GitHub Actions Linux 实测;优雅退出/测试收尾窗口,现跳过并记日志,任务保持 pending 由下次启动恢复)。
 - chart 推送:Harbor 探测分支连接泄漏;OCI bearer token 过期自动重认证(不再误报"凭证无效");ChartMuseum `{"error":...}` 错误体解析;registry Probe 兼容仅返回 `access_token` 的 token 端点。
 - api 杂项:settings 保存失败仍报成功、任务列表 Count 错误未查等错误处理;catalog 直调 skopeo 无超时(30s);创建任务未指定 arch 时改读 `default_arch` 设置而非硬编码。
 
@@ -54,6 +54,7 @@
 - testutil:修复 `NewTestDB` cleanup 后全局 `store.DB` 悬挂指向已关闭连接;新增 testutil 自身契约测试。
 - 前端引入 vitest 2.1.9(与 vite 5 兼容),`web/tests/ref.test.js` 29 例与后端 ref 解析逐条对齐。
 - 跨包合并语句覆盖率 90.0%(验收线 90%)。
+- CI 实测修复:TestRecoverStuckPendingTaskRequeued 时序脆弱(-race 慢调度下"离开 pending"等待条件会命中 running→failed 中间态窗口,改为直接等待终态)。
 
 ### 文档(Docs)
 
