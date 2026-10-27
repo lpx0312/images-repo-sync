@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -156,4 +157,152 @@ func TestRandomSecretUnique(t *testing.T) {
 	if randomSecret() == randomSecret() {
 		t.Fatal("两次随机密钥不应相同")
 	}
+}
+
+// ---- 以下为 B 类边界测试(当前必须通过,GREEN) ----
+// 注:A2「DB 目录存在但只读」的回退测试在 Windows 上无法用只读目录阻止建文件
+// (平台差异,需生产代码引入可注入的探测函数后才可测),按任务约定跳过 A 测试。
+
+// TestLoadDBPathUnderExistingFile GREEN: DB_PATH 指向"已存在普通文件"下的子路径,
+// MkdirAll 必然失败,应回退到 ./data/<basename> 而不是返回错误。
+func TestLoadDBPathUnderExistingFile(t *testing.T) {
+	withDefaults(t, func() {
+		existing := filepath.Join(t.TempDir(), "occupied")
+		if err := os.WriteFile(existing, []byte("x"), 0o644); err != nil {
+			t.Fatalf("构造已存在的普通文件失败: %v", err)
+		}
+		t.Setenv("DB_PATH", filepath.Join(existing, "app.db"))
+
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load 失败: %v", err)
+		}
+		want := filepath.Join("data", "app.db")
+		if c.DBPath != want {
+			t.Errorf("目录创建失败时应回退到 %q, got %q", want, c.DBPath)
+		}
+		if fi, err := os.Stat("data"); err != nil || !fi.IsDir() {
+			t.Errorf("回退目录 ./data 应被创建: %v", err)
+		}
+		// 清理回退在测试 cwd(internal/config)下产生的目录。
+		_ = os.RemoveAll("data")
+	})
+}
+
+// TestLoadDBPathBareFilename GREEN: DB_PATH 为裸文件名(Dir=".")时不触发建目录逻辑,
+// DBPath 原样保留,且 Load 不应越权创建数据库文件本身(建库是 store.Init 的职责)。
+func TestLoadDBPathBareFilename(t *testing.T) {
+	withDefaults(t, func() {
+		t.Setenv("DB_PATH", "app.db")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load 失败: %v", err)
+		}
+		if c.DBPath != "app.db" {
+			t.Errorf("裸文件名应原样保留, got %q", c.DBPath)
+		}
+		if _, err := os.Stat("app.db"); !os.IsNotExist(err) {
+			t.Errorf("Load 不应创建数据库文件本身: stat err = %v", err)
+		}
+		_ = os.RemoveAll("app.db")
+	})
+}
+
+// TestLoadJWTSecretRandomPerLoad GREEN: JWT_SECRET 为空串时每次"冷启动"都生成
+// 新的非空随机密钥;子测试各自先清空单例 JWTSecret,模拟两次独立进程启动。
+func TestLoadJWTSecretRandomPerLoad(t *testing.T) {
+	withDefaults(t, func() {
+		t.Setenv("JWT_SECRET", "")
+		t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "a.db"))
+
+		secrets := make([]string, 2)
+		for i := range secrets {
+			t.Run(fmt.Sprintf("cold_start_%d", i+1), func(t *testing.T) {
+				AppConfig.JWTSecret = "" // 模拟冷启动:单例尚未持有密钥
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load 失败: %v", err)
+				}
+				if c.JWTSecret == "" {
+					t.Fatal("未设 JWT_SECRET 时应生成非空随机密钥")
+				}
+				if len(c.JWTSecret) != 64 { // 32 字节 hex
+					t.Errorf("随机密钥长度 = %d, want 64", len(c.JWTSecret))
+				}
+				secrets[i] = c.JWTSecret
+			})
+		}
+		if secrets[0] == secrets[1] {
+			t.Errorf("两次冷启动生成的密钥不应相同: %q", secrets[0])
+		}
+	})
+}
+
+// TestLoadPortEmptyDefaults8080 GREEN: PORT 为空串时不覆盖,保持默认 8080。
+func TestLoadPortEmptyDefaults8080(t *testing.T) {
+	withDefaults(t, func() {
+		t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "x.db"))
+		t.Setenv("PORT", "")
+		AppConfig.Port = "8080" // 单例先回到默认值,验证空串不会改动它
+
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load 失败: %v", err)
+		}
+		if c.Port != "8080" {
+			t.Errorf("PORT 空串应保持默认 8080, got %q", c.Port)
+		}
+	})
+}
+
+// TestEnvIntEdgeCases GREEN: envInt 解析边界。现有测试只覆盖 0/99,
+// 这里补全符号前缀、负数、临界值、非法值与空串的回退行为。
+func TestEnvIntEdgeCases(t *testing.T) {
+	const def = 7 // 任意默认值,区分"解析成功"与"回退"
+	cases := []struct {
+		name string
+		val  string
+		want int
+	}{
+		{"plus_sign", "+2", 2},  // strconv.Atoi 接受 '+'
+		{"negative", "-3", -3},  // 负数原样返回(clamp 在 Load 层做)
+		{"boundary_8", "8", 8},  // 并发上限边界值
+		{"over_8", "9", 9},      // 超上限,envInt 本身不封顶
+		{"invalid", "abc", def}, // 非法 → 回退默认
+		{"empty", "", def},      // 空串 → 回退默认
+		{"spaces", " 9 ", 9},    // 首尾空白 TrimSpace 后合法
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_ENV_INT_EDGE", tc.val)
+			if got := envInt("TEST_ENV_INT_EDGE", def); got != tc.want {
+				t.Errorf("envInt(%q) = %d, want %d", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoadTaskConcurrencyBoundary GREEN: TASK_CONCURRENCY 0 → 默认 1;9 → clamp 8。
+func TestLoadTaskConcurrencyBoundary(t *testing.T) {
+	withDefaults(t, func() {
+		t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "x.db"))
+		for _, tc := range []struct {
+			val  string
+			want int
+		}{
+			{"0", 1},
+			{"9", 8},
+		} {
+			t.Run("concurrency_"+tc.val, func(t *testing.T) {
+				t.Setenv("TASK_CONCURRENCY", tc.val)
+				c, err := Load()
+				if err != nil {
+					t.Fatalf("Load 失败: %v", err)
+				}
+				if c.TaskConcurrency != tc.want {
+					t.Errorf("TASK_CONCURRENCY=%s 应得到 %d, got %d", tc.val, tc.want, c.TaskConcurrency)
+				}
+			})
+		}
+	})
 }

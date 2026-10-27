@@ -15,13 +15,24 @@
 //	preserveconflict  → 失败,stderr 含 Instructed to preserve digests
 //	manifestunknown   → 失败,stderr 含 manifest unknown
 //	slowcopy          → 睡 30s 模拟大镜像(测试取消;进程被 kill 后立即退出)
+//	dualstream        → 成功,goroutine 并发写 stdout/stderr 各 200 行(测调用方双流回调串行化,配 -race)
+//	longline          → 成功,先写一行 2MB 无换行(超调用方 bufio.Scanner 1MB 上限)再收尾(测缓冲上限与排空)
 //	其余               → 成功,stdout/stderr 输出若干进度行
+//
+// list-tags 与 inspect 同样按引用关键字控制:
+//
+//	failtags    → list-tags 失败,stderr 含 unauthorized
+//	badjson     → list-tags 输出非法 JSON(测解析错误分支)
+//	failinspect → inspect 失败退出 1
+//	varydigest  → inspect 按 ref 哈希输出可变 digest(测 digest 差异逻辑)
 package main
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,9 +51,28 @@ func main() {
 		return
 	case "list-tags":
 		repo := lastRef(args)
+		switch {
+		case strings.Contains(repo, "failtags"):
+			fmt.Fprintln(os.Stderr, "unauthorized: authentication required")
+			os.Exit(1)
+		case strings.Contains(repo, "badjson"):
+			fmt.Println("{invalid json")
+			return
+		}
 		fmt.Printf("{\n    \"Repository\": %q,\n    \"Tags\": [\n        \"1.25\",\n        \"1.26\"\n    ]\n}\n", repo)
 		return
 	case "inspect":
+		ref := lastRef(args)
+		switch {
+		case strings.Contains(ref, "failinspect"):
+			fmt.Fprintln(os.Stderr, "fake skopeo: inspect failed")
+			os.Exit(1)
+		case strings.Contains(ref, "varydigest"):
+			h := fnv.New64a()
+			_, _ = h.Write([]byte(ref))
+			fmt.Printf("sha256:%016x%048x\n", h.Sum64(), 0)
+			return
+		}
 		fmt.Println(fakeDigest)
 		return
 	case "copy":
@@ -77,6 +107,30 @@ func main() {
 		case strings.Contains(joined, "manifestunknown"):
 			fmt.Fprintf(os.Stderr, "manifest unknown\n")
 			os.Exit(1)
+		case strings.Contains(joined, "dualstream"):
+			// 并发写 stdout 与 stderr,驱动调用方双流回调的并发(配合 -race 检测串行化)。
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					fmt.Printf("stdout line %d\n", i)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					fmt.Fprintf(os.Stderr, "stderr line %d\n", i)
+				}
+			}()
+			wg.Wait()
+			return
+		case strings.Contains(joined, "longline"):
+			// 单行 2MB 无换行,超过调用方 bufio.Scanner 的 1MB 缓冲上限;随后继续收尾输出,
+			// 验证调用方在 ErrTooLong 后是否继续排空管道(否则本进程会阻塞在满管道上)。
+			fmt.Fprintf(os.Stderr, "%s", strings.Repeat("x", 2*1024*1024))
+			fmt.Fprintln(os.Stderr, "Writing manifest to image destination")
+			return
 		}
 		fmt.Fprintf(os.Stderr, "Copying blob sha256:aaaa done\n")
 		fmt.Fprintf(os.Stderr, "Writing manifest to image destination\n")

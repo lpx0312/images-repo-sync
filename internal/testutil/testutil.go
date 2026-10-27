@@ -51,6 +51,9 @@ func NewTestDB(tb testing.TB) *gorm.DB {
 	}
 	db := store.DB
 	tb.Cleanup(func() {
+		// 先还原全局再关闭本测试创建的连接:否则 store.DB 悬挂指向已关闭的
+		// 连接池,后续任何不先调 NewTestDB 的用例会拿到 "database is closed"。
+		store.DB = old
 		if db != old { // 关闭本测试创建的连接,避免句柄泄漏。
 			if sqlDB, err := db.DB(); err == nil {
 				_ = sqlDB.Close()
