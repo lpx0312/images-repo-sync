@@ -1,6 +1,10 @@
 services:
   images-repo-sync:
-    build: .
+    build:
+      context: .
+      # 构建源:compose 默认内网源;公网环境 ZONE=global docker compose build
+      args:
+        ZONE: "${ZONE:-cn}"
     image: images-repo-sync:latest
     container_name: images-repo-sync
     restart: unless-stopped

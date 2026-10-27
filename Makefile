@@ -103,16 +103,21 @@ help: ## 显示帮助信息
 # ============================================================================
 # 本地单架构构建
 # ============================================================================
+
+# 构建源:内网默认走 ZONE=cn(内网 Nexus npm/go 代理 + 基础镜像内置 apk 源);
+# 公网/CI 环境用 make build ZONE=global(公共源,任何环境可构建)。
+ZONE ?= cn
+
 .PHONY: build
 build: ## 构建单架构镜像(amd64)
-	@echo "$(BLUE)🐳 构建单架构镜像(amd64)...$(RESET)"
-	@docker build -t $(IMAGE) -t $(IMAGE_VER) .
+	@echo "$(BLUE)🐳 构建单架构镜像(amd64, ZONE=$(ZONE))...$(RESET)"
+	@docker build --build-arg ZONE=$(ZONE) -t $(IMAGE) -t $(IMAGE_VER) .
 	@echo "$(GREEN)✅ 镜像构建完成: $(IMAGE) / $(IMAGE_VER)$(RESET)"
 
 .PHONY: build-no-cache
 build-no-cache: ## 不使用缓存构建单架构
-	@echo "$(BLUE)🐳 构建单架构镜像(no-cache)...$(RESET)"
-	@docker build --no-cache -t $(IMAGE) -t $(IMAGE_VER) .
+	@echo "$(BLUE)🐳 构建单架构镜像(no-cache, ZONE=$(ZONE))...$(RESET)"
+	@docker build --no-cache --build-arg ZONE=$(ZONE) -t $(IMAGE) -t $(IMAGE_VER) .
 	@echo "$(GREEN)✅ 镜像构建完成$(RESET)"
 
 # ============================================================================
@@ -144,6 +149,7 @@ build-multiarch: ensure-builder ## 多架构构建(amd64+arm64, 仅本地 buildx
 	@docker buildx build \
 		--builder $(BUILDER) \
 		--platform $(PLATFORMS) \
+		--build-arg ZONE=$(ZONE) \
 		-t $(REMOTE_LATEST) -t $(REMOTE_SHA) -t $(REMOTE_VERSION) \
 		--load=false \
 		.
@@ -155,6 +161,7 @@ build-push: ensure-builder login ## 多架构构建并推送到阿里云(一键�
 	@docker buildx build \
 		--builder $(BUILDER) \
 		--platform $(PLATFORMS) \
+		--build-arg ZONE=$(ZONE) \
 		-t $(REMOTE_LATEST) -t $(REMOTE_SHA) -t $(REMOTE_VERSION) \
 		--push \
 		.
@@ -292,7 +299,7 @@ tidy: ## go mod tidy
 
 .PHONY: test
 test: ## 运行单元测试
-	@go test ./...
+	@go test ./... -count=1
 
 # 覆盖率统计:跨包合并口径(排除测试基础设施 testutil),验收线 90%。
 COVER_PKGS := $(shell go list ./... | grep -v testutil | paste -sd, -)

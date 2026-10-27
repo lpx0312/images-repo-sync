@@ -1,0 +1,78 @@
+name: CI
+
+# =============================================================================
+# 持续集成门禁:push / PR 时运行
+#   backend  : go vet + go test(纯 Go,无外部网络依赖)
+#   frontend : 前端单测(vitest)+ 生产构建
+#   docker   : 单架构镜像构建冒烟(不推送)+ 容器 healthz 运行冒烟
+# 构建一律使用公共源(Dockerfile 默认 ZONE=global),不依赖任何内网地址。
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./... -count=1
+      # 并发热点包跑 -race(Linux runner 自带 gcc;双流串行化等修复由其守护)。
+      - name: Race tests (concurrency hotspots)
+        run: go test -race ./internal/skopeo/ ./internal/task/ -count=1
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # lockfile 的 resolved URL 指向内网 registry,GitHub 上不可达;
+      # 与 Dockerfile 同策略:删 lockfile 后按公共 registry 解析。
+      - name: Install
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (smoke)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          provenance: false
+          sbom: false
+          tags: images-repo-sync:ci
+      - name: Run smoke (healthz)
+        run: |
+          docker run -d --name irs-ci -p 18080:8080 \
+            -e JWT_SECRET=ci-test-secret -e ENCRYPT_KEY=ci-test-key \
+            images-repo-sync:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:18080/api/healthz; then
+              echo "healthz OK"; docker rm -f irs-ci; exit 0
+            fi
+            sleep 2
+          done
+          echo "healthz 未就绪"; docker logs irs-ci; docker rm -f irs-ci; exit 1

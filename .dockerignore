@@ -5,10 +5,15 @@ data
 *.db
 *.db-journal
 
-# 本地二进制
+# 本地环境配置与密钥(绝不进构建上下文)
+.env
+
+# 本地产物
 /server
 /irs-server
 /tmp
+/bin/
+/gui-test-screenshots/
 
 # 编辑器/系统
 .git

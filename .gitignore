@@ -13,6 +13,9 @@
 *.db-wal
 *.db-shm
 
+# GUI 测试截图(本地生成)
+/gui-test-screenshots/
+
 # 前端
 web/node_modules/
 # dist 构建产物不入库,但保留 .gitkeep 占位(go:embed 要求目录存在)
