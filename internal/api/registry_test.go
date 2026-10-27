@@ -6,7 +6,8 @@ func TestNormalizeHost(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"harbor.example.com", "harbor.example.com"},
 		{"https://harbor.example.com", "harbor.example.com"},
-		{"http://harbor.example.com", "harbor.example.com"},
+		// http:// 前缀是"明文 HTTP registry"的功能标记,probe/skopeo 据此选协议,必须保留。
+		{"http://harbor.example.com", "http://harbor.example.com"},
 		{"  harbor.example.com  ", "harbor.example.com"},
 		{"harbor.example.com/", "harbor.example.com"},
 		{"/harbor.example.com/", "harbor.example.com"},

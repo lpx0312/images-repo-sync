@@ -294,6 +294,15 @@ tidy: ## go mod tidy
 test: ## 运行单元测试
 	@go test ./...
 
+# 覆盖率统计:跨包合并口径(排除测试基础设施 testutil),验收线 90%。
+COVER_PKGS := $(shell go list ./... | grep -v testutil | paste -sd, -)
+
+.PHONY: test-cov
+test-cov: ## 运行全部测试并输出总覆盖率(跨包合并,≥90% 达标)
+	@go test $$(go list ./... | grep -v testutil) -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1
+	@go tool cover -func=coverage.out | tail -1
+	@echo "明细: go tool cover -html=coverage.out"
+
 # ============================================================================
 # 环境配置
 # ============================================================================
