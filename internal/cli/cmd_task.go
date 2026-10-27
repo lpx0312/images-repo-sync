@@ -209,11 +209,12 @@ func cmdTasksCreate(a *App, args []string) error {
 
 	body := map[string]any{
 		"source_registry_id": *source,
-		"target_registry_id": *target,
-		"mode":               *mode,
-		"target_project":     *project,
-		"arch":               *arch,
-		"refs":               refs,
+		// 服务端为多目标数组字段(target_registry_ids);CLI 单 --target 展开为单元素数组。
+		"target_registry_ids": []uint{*target},
+		"mode":                *mode,
+		"target_project":      *project,
+		"arch":                *arch,
+		"refs":                refs,
 	}
 	var t taskVO
 	c, err := a.confirmClient()

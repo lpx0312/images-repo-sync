@@ -242,7 +242,8 @@ func classifyNetErr(err error, host string) ProbeResult {
 		return ProbeResult{OK: false, Message: "连接超时:仓库未在 20 秒内响应", Detail: err.Error()}
 	case strings.Contains(msg, "no such host") || strings.Contains(msg, "lookup"):
 		return ProbeResult{OK: false, Message: fmt.Sprintf("无法解析主机 %s(地址错误或 DNS 故障)", host), Detail: err.Error()}
-	case strings.Contains(msg, "connection refused"):
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "actively refused"):
+		// "actively refused" 是 Windows winsock 的 connection refused 错误文本。
 		return ProbeResult{OK: false, Message: "连接被拒绝:目标端口未开放或服务未启动", Detail: err.Error()}
 	case strings.Contains(msg, "x509") || strings.Contains(msg, "certificate"):
 		return ProbeResult{OK: false, Message: "TLS 证书校验失败,可尝试开启「跳过 TLS」", Detail: err.Error()}

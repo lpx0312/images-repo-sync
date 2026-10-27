@@ -74,12 +74,16 @@ func isHost(s string) bool {
 	return strings.Contains(s, ".") || strings.Contains(s, ":")
 }
 
-// StripScheme 剥掉 host 配置中的 http(s):// 前缀,返回裸 host。
+// StripScheme 剥掉 host 配置中的 http(s):// 前缀(大小写不敏感),返回裸 host。
 // 用于「源镜像组」按主机名匹配(配置里可能带 scheme 标识明文 HTTP)。
 func StripScheme(host string) string {
 	host = strings.TrimSpace(host)
-	host = strings.TrimPrefix(host, "https://")
-	host = strings.TrimPrefix(host, "http://")
+	for _, p := range []string{"https://", "http://"} {
+		if len(host) >= len(p) && strings.EqualFold(host[:len(p)], p) {
+			host = host[len(p):]
+			break
+		}
+	}
 	return strings.Trim(host, "/")
 }
 

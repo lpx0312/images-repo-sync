@@ -369,7 +369,7 @@ func pushOCI(ctx context.Context, t Target, m *Meta, data []byte) (*PushResult, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		io.Copy(io.Discard, resp.Body)
+		// 注意:错误 body 交给 readErrBody 读取,不能提前丢弃。
 		return nil, fmt.Errorf("推送 manifest 失败(HTTP %d): %s", resp.StatusCode, readErrBody(resp))
 	}
 	// 响应体不需要,但保持连接复用前读完。
@@ -401,7 +401,6 @@ func (o *ociClient) pushBlob(ctx context.Context, repo string, content []byte) e
 		return fmt.Errorf("初始化 blob 上传失败: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 
 	switch resp.StatusCode {
 	case http.StatusCreated, http.StatusAccepted:
@@ -440,7 +439,6 @@ func (o *ociClient) pushBlob(ctx context.Context, repo string, content []byte) e
 		return classifyNetErr(err)
 	}
 	defer putResp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(putResp.Body, 4096))
 
 	switch putResp.StatusCode {
 	case http.StatusCreated, http.StatusAccepted, http.StatusOK, http.StatusNoContent:
