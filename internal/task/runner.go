@@ -40,6 +40,13 @@ type resolvedCreds struct {
 // 源凭证按明细各自的 source_registry_id 取(自动匹配源的任务每条镜像可能来自不同仓库)。
 func (m *Manager) runTask(taskID uint) (retErr error) {
 	db := store.DB
+	if db == nil {
+		// 关停/测试窗口:全局 DB 已被关闭并清空(优雅退出或测试收尾时,worker 可能
+		// 晚于 DB 生命周期仍在消费队列)。跳过执行而非 panic;任务保持 pending,
+		// 由下次启动的 RecoverStuckTasks 重新入队。
+		log.Printf("[task] 跳过任务 %d:store.DB 不可用(服务关停中)", taskID)
+		return nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.RegisterCancel(taskID, cancel)

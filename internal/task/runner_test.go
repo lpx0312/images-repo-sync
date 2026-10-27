@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	"images-repo-sync/internal/model"
+	"images-repo-sync/internal/store"
 	"images-repo-sync/internal/testutil"
 )
 
@@ -302,5 +303,19 @@ func TestUpdateItemDBFailure(t *testing.T) {
 	}
 	if after.Status != model.ItemStatusPending {
 		t.Errorf("失效连接上的更新不应影响原库: 明细状态 = %s, want pending", after.Status)
+	}
+}
+
+// 回归锁定(已修复):后台 worker 可能晚于 DB 生命周期仍在消费队列(优雅退出/测试收尾窗口,
+// store.DB 已被关闭并还原为 nil)。runTask 应跳过并返回 nil 而非 nil 指针 panic
+// ——CI Linux 上曾因此真实崩溃(gorm.(*DB).Transaction 空 receiver SIGSEGV)。
+func TestRunTaskSkipsWhenDBUnavailable(t *testing.T) {
+	old := store.DB
+	store.DB = nil
+	t.Cleanup(func() { store.DB = old })
+
+	m := Instance()
+	if err := m.runTask(1); err != nil {
+		t.Errorf("store.DB 不可用时应跳过并返回 nil,得到 %v", err)
 	}
 }
