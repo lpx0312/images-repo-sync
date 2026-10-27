@@ -78,9 +78,11 @@ func TestRecoverStuckPendingTaskRequeued(t *testing.T) {
 
 	RecoverStuckTasks()
 
-	testutil.WaitFor(t, 15*time.Second, "pending 任务被重新执行并离开 pending", func() bool {
-		st := reloadTask(t, db, task.ID).Status
-		return st != model.TaskStatusPending
+	// 直接等待终态 failed:若只等"离开 pending",worker 事务先置 running、
+	// 兜底 defer 再写 failed,两步之间的窗口在 -race 慢调度下会被轮询命中,
+	// 断言会读到中间态 running(曾致 CI flaky)。
+	testutil.WaitFor(t, 15*time.Second, "重入队任务到达终态 failed", func() bool {
+		return reloadTask(t, db, task.ID).Status == model.TaskStatusFailed
 	})
 	tk := reloadTask(t, db, task.ID)
 	if tk.Status != model.TaskStatusFailed {
