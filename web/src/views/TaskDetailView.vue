@@ -103,6 +103,11 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const taskId = Number(route.params.id)
+// 非法任务 id(非数字)直接回列表:NaN 进入请求会导致轮询每 3s 循环报错。
+if (!Number.isInteger(taskId) || taskId <= 0) {
+  router.replace('/tasks')
+  throw new Error('invalid task id')
+}
 
 const task = reactive({
   id: taskId, status: 'pending', total: 0, succeeded: 0, failed: 0, skipped: 0,
@@ -162,18 +167,40 @@ async function reload() {
   Object.assign(task, {
     status: body.status, total: body.total, succeeded: body.succeeded, failed: body.failed, skipped: body.skipped,
     mode: body.mode, arch: body.arch, target_project: body.target_project,
+    target_registry_id: body.target_registry_id,
     started_at: body.started_at, finished_at: body.finished_at,
   })
   items.value = body.items || []
 }
 
 async function onCancel() {
-  await ElMessageBox.confirm('确定取消该任务吗？', '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm('确定取消该任务吗？', '提示', { type: 'warning' })
+  } catch {
+    return // 用户点了取消
+  }
   await taskAPI.cancel(taskId)
   ElMessage.success('已请求取消')
 }
 
 // SSE:用 fetch + ReadableStream 手动解析 text/event-stream(EventSource 不支持自定义 Authorization 头)。
+// 断流重连:反向代理超时/服务端重启常表现为"干净关闭"(done=true)而非网络错误,
+// 任务未到终态时延时重连,连续失败过多次降级轮询——否则进度与日志会永久停更。
+let streamRetries = 0
+let retryTimer = null
+function scheduleStreamRetry() {
+  if (['success', 'failed', 'canceled'].includes(task.status)) return
+  if (streamRetries++ >= 5) {
+    startPolling()
+    return
+  }
+  // 记录 timer id:onUnmounted 时清掉,避免卸载 3s 后仍拉起新的 SSE 连接泄漏。
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    if (!['success', 'failed', 'canceled'].includes(task.status)) startStream()
+  }, 3000)
+}
+
 function startStream() {
   abortCtrl = new AbortController()
   const token = authStore.token
@@ -202,10 +229,12 @@ function startStream() {
           handleFrame(frame)
         }
       }
+      // 流被服务端/代理正常关闭:任务没到终态就重连,而不是让页面冻结。
+      scheduleStreamRetry()
     })
     .catch(() => {
-      // 网络中断等情况,降级轮询。
-      startPolling()
+      // 网络中断等情况,同样先尝试重连,多次失败后由其内部降级轮询。
+      scheduleStreamRetry()
     })
 }
 
@@ -230,6 +259,7 @@ function handleFrame(frame) {
 function applyEvent(eventName, payload) {
   switch (eventName) {
     case 'snapshot':
+      streamRetries = 0 // 成功收到快照说明链路恢复,重置重连计数。
       if (payload?.data) {
         const d = payload.data
         Object.assign(task, {
@@ -315,7 +345,11 @@ function pushLog(text, level = '', ts = null) {
 function startPolling() {
   if (pollTimer) return
   pollTimer = setInterval(async () => {
-    await reload()
+    try {
+      await reload()
+    } catch {
+      // 网络错误忽略,下一轮重试;避免未处理 rejection 每 3s 报错。
+    }
     if (['success', 'failed', 'canceled'].includes(task.status)) {
       clearInterval(pollTimer)
       pollTimer = null
@@ -363,6 +397,7 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   stopStream()
+  if (retryTimer) clearTimeout(retryTimer)
   if (pollTimer) clearInterval(pollTimer)
 })
 </script>

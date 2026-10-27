@@ -206,9 +206,13 @@ async function onSave() {
 }
 
 async function onRemove(row) {
-  await ElMessageBox.confirm(`确定删除仓库「${row.name}」吗?`, '提示', {
-    type: 'warning',
-  })
+  try {
+    await ElMessageBox.confirm(`确定删除仓库「${row.name}」吗?`, '提示', {
+      type: 'warning',
+    })
+  } catch {
+    return // 用户点了取消
+  }
   await registryAPI.remove(row.id)
   ElMessage.success('已删除')
   await load()

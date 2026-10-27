@@ -233,17 +233,25 @@ func (o *ociClient) do(ctx context.Context, method, rawURL string, body []byte, 
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, nil
 	}
-	// 401:按 challenge 获取认证后重试一次。
+	// 401:按 challenge 获取认证后重试一次。首次匿名请求与已带认证的请求
+	// (如会话中 token 过期)统一处理:重新走 authenticate 换新凭证再试,
+	// 仍 401 才判定凭证无效,避免把 token 过期误报成凭证错误。
 	challenge := resp.Header.Get("WWW-Authenticate")
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	if o.authHeader != "" {
-		return nil, fmt.Errorf("认证失败:凭证无效或无推送权限")
-	}
 	if err := o.authenticate(ctx, challenge, repo); err != nil {
 		return nil, err
 	}
-	return o.attempt(ctx, method, rawURL, body, contentType)
+	resp, err = o.attempt(ctx, method, rawURL, body, contentType)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("认证失败:凭证无效或无推送权限")
+	}
+	return resp, nil
 }
 
 // attempt 真正发起一次 HTTP 请求。
@@ -424,19 +432,20 @@ func (o *ociClient) pushBlob(ctx context.Context, repo string, content []byte) e
 	}
 	uploadURL += sep + "digest=" + url.QueryEscape(digestOf(content))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(content))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	// Location 可能是跨主机的预签名 URL(云厂商 registry);此时不能携带仓库凭证,
-	// 仅当上传地址与仓库同主机时附加 Authorization。
-	if o.authHeader != "" && sameHost(o.base, uploadURL) {
-		req.Header.Set("Authorization", o.authHeader)
-	}
-	putResp, err := o.client.Do(req)
+	putResp, err := o.putUpload(ctx, uploadURL, content)
 	if err != nil {
 		return classifyNetErr(err)
+	}
+	if putResp.StatusCode == http.StatusUnauthorized {
+		// 上传会话中途 401 多为 token 过期:按 challenge 重新认证后再试一次。
+		challenge := putResp.Header.Get("WWW-Authenticate")
+		io.Copy(io.Discard, putResp.Body)
+		putResp.Body.Close()
+		if rerr := o.authenticate(ctx, challenge, repo); rerr == nil {
+			if putResp, err = o.putUpload(ctx, uploadURL, content); err != nil {
+				return classifyNetErr(err)
+			}
+		}
 	}
 	defer putResp.Body.Close()
 
@@ -446,6 +455,21 @@ func (o *ociClient) pushBlob(ctx context.Context, repo string, content []byte) e
 	default:
 		return fmt.Errorf("上传 blob 失败(HTTP %d): %s", putResp.StatusCode, readErrBody(putResp))
 	}
+}
+
+// putUpload 向上传会话地址 PUT blob 内容。
+// Location 可能是跨主机的预签名 URL(云厂商 registry);此时不能携带仓库凭证,
+// 仅当上传地址与仓库同主机时附加 Authorization。
+func (o *ociClient) putUpload(ctx context.Context, uploadURL string, content []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if o.authHeader != "" && sameHost(o.base, uploadURL) {
+		req.Header.Set("Authorization", o.authHeader)
+	}
+	return o.client.Do(req)
 }
 
 // resolveLocation 把仓库返回的 Location(绝对或相对)拼成完整 URL。
@@ -496,7 +520,9 @@ func parseBearerChallenge(header string) (realm, service string) {
 	return
 }
 
-// readErrBody 读取响应体并尽量提取 OCI 标准 {"errors":[...]} 里的 message。
+// readErrBody 读取响应体并尽量提取可读错误文本:
+// OCI 标准 {"errors":[...]} 的 message、通用 {"message":"..."}、
+// 以及 ChartMuseum 风格的 {"error":"..."}。
 func readErrBody(resp *http.Response) string {
 	if resp.Body == nil {
 		return ""
@@ -507,6 +533,7 @@ func readErrBody(resp *http.Response) string {
 			Message string `json:"message"`
 		} `json:"errors"`
 		Message string `json:"message"`
+		Error   string `json:"error"` // ChartMuseum 的错误字段
 	}
 	if json.Unmarshal(body, &parsed) == nil {
 		if len(parsed.Errors) > 0 && parsed.Errors[0].Message != "" {
@@ -514,6 +541,9 @@ func readErrBody(resp *http.Response) string {
 		}
 		if parsed.Message != "" {
 			return truncate(parsed.Message, 200)
+		}
+		if parsed.Error != "" {
+			return truncate(parsed.Error, 200)
 		}
 	}
 	return truncate(strings.TrimSpace(string(body)), 200)
@@ -598,6 +628,9 @@ func probeChartMuseum(ctx context.Context, t Target) registry.ProbeResult {
 		if err != nil {
 			return registry.ProbeResult{OK: false, Message: classifyNetErr(err).Error(), Endpoint: endpoint}
 		}
+		// 各分支均直接 return,统一在此排空并关闭 body,避免连接泄漏。
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
 		switch resp.StatusCode {
 		case http.StatusOK:
 			return registry.ProbeResult{OK: true, Message: "连接成功(Harbor ChartMuseum)", Endpoint: endpoint}

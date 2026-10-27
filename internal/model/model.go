@@ -55,11 +55,13 @@ const (
 )
 
 // User 是登录用户。单 admin 角色,不做多角色 RBAC。
+// PwdChangedAt 记录最近一次改密时间:早于该时间签发的 JWT 一律失效(改密即吊销旧 token)。
 type User struct {
 	ID           uint       `json:"id" gorm:"primaryKey"`
 	Username     string     `json:"username" gorm:"type:varchar(50);uniqueIndex;not null"`
 	PasswordHash string     `json:"-" gorm:"type:varchar(255);not null"`
 	Status       string     `json:"status" gorm:"type:varchar(20);default:'active'"`
+	PwdChangedAt time.Time  `json:"-" gorm:"column:pwd_changed_at"`
 	LastLoginAt  *time.Time `json:"last_login_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -100,10 +102,10 @@ type SyncTask struct {
 	Succeeded        int            `json:"succeeded" gorm:"default:0"`
 	Failed           int            `json:"failed" gorm:"default:0"`
 	Skipped          int            `json:"skipped" gorm:"default:0"`
-	Status           string         `json:"status" gorm:"type:varchar(20);default:'pending';index"`
+	Status           string         `json:"status" gorm:"type:varchar(20);default:'pending';index:idx_sync_tasks_status_created_at,priority:1"`
 	Error            string         `json:"error" gorm:"type:text"`
 	CreatedBy        uint           `json:"created_by" gorm:"default:0"`
-	CreatedAt        time.Time      `json:"created_at"`
+	CreatedAt        time.Time      `json:"created_at" gorm:"index:idx_sync_tasks_status_created_at,priority:2"`
 	StartedAt        *time.Time     `json:"started_at"`
 	FinishedAt       *time.Time     `json:"finished_at"`
 	Items            []SyncTaskItem `json:"items" gorm:"foreignKey:TaskID"`
@@ -176,7 +178,7 @@ type ChartUpload struct {
 
 func (ChartUpload) TableName() string { return "chart_uploads" }
 
-// LoginLog 记录登录审计。
+// LoginLog 记录登录审计。CreatedAt 建索引:审计列表按时间倒序分页的高频查询。
 type LoginLog struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	UserID    uint      `json:"user_id" gorm:"index"`
@@ -185,7 +187,7 @@ type LoginLog struct {
 	UserAgent string    `json:"user_agent" gorm:"type:varchar(255)"`
 	Status    string    `json:"status" gorm:"type:varchar(20);index"`
 	Message   string    `json:"message" gorm:"type:varchar(255)"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `json:"created_at" gorm:"index"`
 }
 
 func (LoginLog) TableName() string { return "login_logs" }

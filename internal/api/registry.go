@@ -189,7 +189,13 @@ func (h *RegistryHandler) Test(c *gin.Context) {
 	}
 	pass := ""
 	if m.PasswordEnc != "" {
-		pass, _ = crypto.Decrypt(m.PasswordEnc)
+		p, err := crypto.Decrypt(m.PasswordEnc)
+		if err != nil {
+			// 错误信息不含密码内容,只提示密钥配置问题。
+			serverErr(c, "密码解密失败,请检查 ENCRYPT_KEY 配置")
+			return
+		}
+		pass = p
 	}
 	result := registry.Probe(c.Request.Context(), m.Host, m.Username, pass, m.Insecure)
 	ok(c, result) // 始终 200,由前端根据 ok 字段展示红/绿

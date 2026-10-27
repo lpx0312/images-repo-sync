@@ -96,10 +96,10 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		targets = append(targets, dst)
 	}
 
-	// 校验架构取值,空值默认 amd64。
+	// 校验架构取值,空值取系统设置 default_arch(缺失/非法回退 amd64)。
 	arch := req.Arch
 	if arch == "" {
-		arch = skopeo.ArchAMD64
+		arch = h.defaultArch()
 	}
 	switch arch {
 	case skopeo.ArchAMD64, skopeo.ArchARM64, skopeo.ArchAll:
@@ -238,6 +238,16 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	ok(c, h.buildTaskVO(t, true))
 }
 
+// defaultArch 读系统设置中的默认同步架构,缺失或非法时回退 amd64。
+func (h *TaskHandler) defaultArch() string {
+	var row model.SystemSetting
+	if err := h.DB.Where("`key` = ?", model.SettingKeyDefaultArch).First(&row).Error; err == nil &&
+		validArchs[row.Value] {
+		return row.Value
+	}
+	return skopeo.ArchAMD64
+}
+
 // matchSourceGroup 提取 refs 中出现的主机名,与「源镜像组」仓库按 host 匹配。
 // 返回 host(小写)-> registryID 映射,以及没有匹配配置且不是 docker.io 的主机名列表。
 // 匹配键统一剥掉 http(s):// 前缀(仓库配置可能带 scheme 标识明文 HTTP)。
@@ -283,7 +293,10 @@ func (h *TaskHandler) List(c *gin.Context) {
 		q = q.Where("status = ?", status)
 	}
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		serverErr(c, "查询任务失败")
+		return
+	}
 	var list []model.SyncTask
 	if err := q.Offset((page - 1) * size).Limit(size).Find(&list).Error; err != nil {
 		serverErr(c, "查询任务失败")
@@ -325,8 +338,15 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 	}
 	if !task.Instance().Cancel(uint(id)) {
 		// 可能还在队列里没开始;直接置 canceled。
-		now := nowPtr()
-		h.DB.Model(&t).Updates(map[string]any{"status": model.TaskStatusCanceled, "finished_at": now, "error": "取消"})
+		// 条件更新防竞态:读到 pending/running 与落库之间任务可能恰好跑完,
+		// 此时 RowsAffected=0,不能把真实终态(success/failed)覆盖为 canceled。
+		res := h.DB.Model(&model.SyncTask{}).
+			Where("id = ? AND status IN ?", id, []string{model.TaskStatusPending, model.TaskStatusRunning}).
+			Updates(map[string]any{"status": model.TaskStatusCanceled, "finished_at": nowPtr(), "error": "取消"})
+		if res.Error == nil && res.RowsAffected == 0 {
+			ok(c, gin.H{"message": "任务已结束"})
+			return
+		}
 	}
 	ok(c, gin.H{"message": "已请求取消"})
 }

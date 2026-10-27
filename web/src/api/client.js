@@ -20,16 +20,17 @@ client.interceptors.request.use((config) => {
 // 响应拦截:统一拆 {data} / {error};401 清登录态并跳登录。
 client.interceptors.response.use(
   (response) => {
-    const body = response.data
-    // 后端成功统一返回 { data: ... } 或 { data, total, ... }。
-    if (body && typeof body === 'object' && ('data' in body || 'total' in body)) {
-      return body
-    }
-    return body
+    // 后端成功统一返回 { data: ... } 或 { data, total, ... },直接透传给调用方拆包。
+    return response.data
   },
   (error) => {
     const status = error.response?.status
-    const msg = error.response?.data?.error || error.message || '请求失败'
+    let msg = error.response?.data?.error || ''
+    // 无响应体 = 网络层失败(断网/超时),映射为中文提示。
+    if (!error.response) {
+      msg = error.code === 'ECONNABORTED' ? '请求超时,请稍后重试' : '网络错误,请检查网络连接'
+    }
+    if (!msg) msg = error.message || '请求失败'
     // 请求的 URL,用于区分登录接口和其他接口。
     const reqURL = error.config?.url || ''
 
@@ -48,7 +49,7 @@ client.interceptors.response.use(
         }
       }
     } else if (status >= 500) {
-      ElMessage.error('服务器异常,请稍后重试')
+      ElMessage.error(msg === '请求失败' ? '服务器异常,请稍后重试' : msg)
     } else {
       ElMessage.error(msg)
     }

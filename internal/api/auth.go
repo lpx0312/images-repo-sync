@@ -84,7 +84,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	now := time.Now()
-	h.DB.Model(&user).Update("last_login_at", now)
+	if err := h.DB.Model(&user).Update("last_login_at", now).Error; err != nil {
+		fmt.Printf("[auth] 更新 last_login_at 失败: %v\n", err)
+	}
 	store.RecordLoginLog(user.ID, user.Username, ip, ua, model.LoginStatusSuccess, "登录成功")
 
 	ok(c, gin.H{
@@ -129,6 +131,7 @@ type changePasswordRequest struct {
 // ChangePassword PUT /api/auth/password
 //
 // 校验旧密码 + 新密码强度(≥8 位含大小写数字特殊字符)→ 更新。
+// 同时写入 pwd_changed_at:早于该时刻签发的 token 在中间件被拒绝(改密即吊销旧 token)。
 // 改密码后强制重新登录(前端会清 token)。
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	var req changePasswordRequest
@@ -156,7 +159,10 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		serverErr(c, "密码哈希失败")
 		return
 	}
-	if err := h.DB.Model(&user).Update("password_hash", hash).Error; err != nil {
+	if err := h.DB.Model(&user).Updates(map[string]any{
+		"password_hash":  hash,
+		"pwd_changed_at": time.Now(),
+	}).Error; err != nil {
 		serverErr(c, "更新密码失败")
 		return
 	}

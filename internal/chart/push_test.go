@@ -640,12 +640,18 @@ func TestOCIClientBasicChallenge(t *testing.T) {
 		t.Fatalf("状态 = %d", resp.StatusCode)
 	}
 
-	// 已带 authHeader 再遇 401 → 凭证无效错误。
+	// 回归锁定(已修复): A3 已带(过期)Bearer 再遇 401 时,应按 challenge 重新认证
+	// 并用 Basic 凭证重试成功,而不是直接误报「凭证无效」。
+	// 该服务端对带 Basic 凭证的请求返回 200。
 	o2 := newOCIClient(Target{Scheme: "http", Host: strings.TrimPrefix(ts.URL, "http://"), Username: "u", Password: "p"})
 	o2.authHeader = "Bearer stale"
-	if _, err := o2.do(context.Background(), http.MethodGet, ts.URL+"/v2/", nil, "", ""); err == nil ||
-		!strings.Contains(err.Error(), "凭证无效") {
-		t.Fatalf("已认证再 401 应报凭证无效: %v", err)
+	resp2, err := o2.do(context.Background(), http.MethodGet, ts.URL+"/v2/", nil, "", "")
+	if err != nil {
+		t.Fatalf("过期 Bearer 应按 challenge 重认证后成功, got: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("重认证后应返回 200, got %d", resp2.StatusCode)
 	}
 }
 

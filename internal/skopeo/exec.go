@@ -39,23 +39,40 @@ func runWithStream(ctx context.Context, args []string, handler LineHandler) erro
 	}
 
 	// 合并 stdout+stderr 按行回调。顺序按各自读到的先后。
+	// 串行化回调:两个读取 goroutine 只负责把行送入 channel,由下方单循环依次
+	// 调用 handler —— handler 可能是非并发安全的(如 copy 的 ringBuffer),
+	// 并发调用会触发数据竞争;经 channel 单点消费后回调天然串行且行不丢。
+	lines := make(chan string, 128)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	stream := func(r io.Reader) {
+	pump := func(r io.Reader) {
 		defer wg.Done()
-		s := bufio.NewScanner(r)
-		s.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for s.Scan() {
-			line := s.Text()
-			if handler != nil {
-				handler(line)
+		// 用 Reader+ReadString 而非 Scanner:Scanner 有 1MB 单行上限,
+		// 超限即停读,子进程会阻塞在写满的管道上;ReadString 无长度限制,
+		// 超长行也继续排空(整段作为一个回调行),保留逐行回调语义。
+		br := bufio.NewReader(r)
+		for {
+			line, err := br.ReadString('\n')
+			if line != "" {
+				lines <- strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			}
+			if err != nil {
+				return // io.EOF 或读错误
 			}
 		}
 	}
-	go stream(stdout)
-	go stream(stderr)
+	go pump(stdout)
+	go pump(stderr)
+	go func() {
+		wg.Wait()
+		close(lines)
+	}()
 
-	wg.Wait()
+	for line := range lines {
+		if handler != nil {
+			handler(line)
+		}
+	}
 
 	if err := cmd.Wait(); err != nil {
 		// 被取消时优先返回 ctx 的错误,语义更清晰。

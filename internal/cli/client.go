@@ -311,7 +311,6 @@ func (c *Client) StreamSSE(ctx context.Context, path string, fn func(SSEEvent) b
 		case line == "":
 			if event.Len() > 0 || data.Len() > 0 {
 				d := append([]byte(nil), data.Bytes()...)
-				// SSE 规范:data 多行以 \n 连接;本平台事件均为单行 JSON。
 				if !fn(SSEEvent{Event: strings.TrimSpace(event.String()), Data: d}) {
 					return false
 				}
@@ -323,6 +322,10 @@ func (c *Client) StreamSSE(ctx context.Context, path string, fn func(SSEEvent) b
 		case strings.HasPrefix(line, "event:"):
 			event.WriteString(trimOneSpace(strings.TrimPrefix(line, "event:")))
 		case strings.HasPrefix(line, "data:"):
+			// SSE 规范:同一事件的多行 data 以 \n 连接后再作为载荷。
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
 			data.WriteString(trimOneSpace(strings.TrimPrefix(line, "data:")))
 		}
 		return true
@@ -344,6 +347,10 @@ func (c *Client) StreamSSE(ctx context.Context, path string, fn func(SSEEvent) b
 		}
 		if err != nil {
 			if err == io.EOF {
+				// 连接正常结束但服务端未以空行收尾:缓冲里还有未分发的 data 行,按事件补发一次。
+				if event.Len() > 0 || data.Len() > 0 {
+					_ = scannerLine("")
+				}
 				return nil
 			}
 			return err

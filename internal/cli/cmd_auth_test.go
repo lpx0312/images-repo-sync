@@ -275,7 +275,12 @@ func TestCmdHealth(t *testing.T) {
 	a3 := newCmdApp(t, "", "")
 	a3.ConfigPath = t.TempDir() + "/not-exist.json"
 	if err := cmdHealth(a3, nil); err == nil || !strings.Contains(err.Error(), "未配置") {
-		t.Errorf("未配置应报错: %v", err)
+		t.Errorf("未配置且未给 --server 应报错: %v", err)
+	}
+	// 回归锁定(已修复): A1 无任何全局配置时 `health --server URL` 应直接成功(confirmClient 不应先于 --server 解析拦截)。
+	okTS, _ := apiServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	if err := cmdHealth(a3, []string{"--server", okTS.Server}); err != nil {
+		t.Errorf("health --server <URL> 在无全局配置时应成功: %v", err)
 	}
 	// JSON 模式。
 	a4, _ := apiServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,13 +50,15 @@ func Load() (*Config, error) {
 	if v := os.Getenv("DB_PATH"); v != "" {
 		c.DBPath = v
 	}
-	// 确保数据库目录存在,否则建库会失败。
+	// 确保数据库目录存在且真正可写,否则建库会失败。
 	if dir := filepath.Dir(c.DBPath); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			// 目录不可写时回退到本地 ./data,保证开发体验。
+		if err := ensureDirWritable(dir); err != nil {
+			// 目录不存在或不可写时回退到本地 ./data,保证开发体验。
 			fallback := filepath.Join("data", filepath.Base(c.DBPath))
-			_ = os.MkdirAll(filepath.Dir(fallback), 0o755)
-			fmt.Printf("[config] 无法创建数据库目录 %s,回退到 %s: %v\n", dir, fallback, err)
+			if fbErr := os.MkdirAll(filepath.Dir(fallback), 0o755); fbErr != nil {
+				log.Printf("[config] 创建回退数据库目录 %s 失败: %v", filepath.Dir(fallback), fbErr)
+			}
+			fmt.Printf("[config] 无法使用数据库目录 %s(%v),回退到 %s\n", dir, err, fallback)
 			c.DBPath = fallback
 		}
 	}
@@ -111,12 +114,26 @@ func envInt(name string, def int) int {
 	return def
 }
 
+// ensureDirWritable 确保目录存在且真正可写:MkdirAll 成功后再写探测文件并删除。
+// 防止目录存在但只读/权限受限时 MkdirAll 静默通过、拖到建库阶段才失败。
+func ensureDirWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	probe := filepath.Join(dir, ".irs-probe")
+	if err := os.WriteFile(probe, []byte("probe"), 0o644); err != nil {
+		return err
+	}
+	return os.Remove(probe)
+}
+
 // randomSecret 生成 32 字节随机十六进制字符串作为临时 JWT 密钥。
 func randomSecret() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// rand.Read 几乎不会失败;若失败则用固定兜底(并明显告警)。
-		return "INSECURE-FALLBACK-PLEASE-SET-JWT-SECRET"
+		// crypto/rand 熵源故障时实际不可达;绝不能静默退回公开常量签发 token,
+		// 宁愿快速失败(fail-fast)让问题在启动阶段立刻暴露。
+		panic(fmt.Sprintf("[config] 生成 JWT 随机密钥失败(系统熵源故障): %v", err))
 	}
 	return hex.EncodeToString(b)
 }

@@ -51,8 +51,15 @@ func RecoverStuckTasks() {
 	}
 }
 
-// refreshTaskCounts 按明细实际状态回填任务的 succeeded/failed/skipped 计数。
+// refreshTaskCounts 按明细实际状态回填任务的 succeeded/failed/skipped 计数,
+// 并同步 total(调用前明细均已置终态,三者之和即总数)。
 func refreshTaskCounts(taskID uint) {
+	if store.DB == nil {
+		// 关停/测试窗口:全局 DB 已被关闭并清空,统计已无意义,跳过而非 panic
+		// (后台 worker 可能晚于 DB 生命周期收尾)。
+		log.Printf("[task] 统计任务 %d 明细跳过: store.DB 不可用", taskID)
+		return
+	}
 	var rows []struct {
 		Status string
 		N      int64
@@ -72,5 +79,6 @@ func refreshTaskCounts(taskID uint) {
 		"succeeded": counts[model.ItemStatusSuccess],
 		"failed":    counts[model.ItemStatusFailed],
 		"skipped":   counts[model.ItemStatusSkipped],
+		"total":     counts[model.ItemStatusSuccess] + counts[model.ItemStatusFailed] + counts[model.ItemStatusSkipped],
 	})
 }

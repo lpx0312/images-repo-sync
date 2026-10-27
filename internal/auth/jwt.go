@@ -43,7 +43,7 @@ func GenerateToken(userID uint, username string, rememberMe bool) (string, time.
 	return signed, expiresAt, nil
 }
 
-// ValidateToken 校验并解析 JWT。签名方法必须是 HMAC。
+// ValidateToken 校验并解析 JWT。签名方法仅允许 HS256,且必须携带 exp 过期时间。
 func ValidateToken(tokenString string) (*Claims, error) {
 	secret := config.AppConfig.JWTSecret
 	claims := &Claims{}
@@ -52,12 +52,16 @@ func ValidateToken(tokenString string) (*Claims, error) {
 			return nil, errors.New("不支持的签名方法")
 		}
 		return []byte(secret), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return nil, err
 	}
 	if !token.Valid {
 		return nil, errors.New("token 无效")
+	}
+	// jwt/v5 默认不强制 exp:这里显式要求必须携带过期时间,防止签发永不过期的凭证。
+	if exp, _ := claims.GetExpirationTime(); exp == nil {
+		return nil, errors.New("token 缺少过期时间")
 	}
 	return claims, nil
 }

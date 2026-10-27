@@ -211,11 +211,15 @@ async function onSave() {
 }
 
 async function onRemove(row) {
-  await ElMessageBox.confirm(
-    `确定删除 Chart 仓库「${row.name}」吗?历史上传记录不受影响。`,
-    '提示',
-    { type: 'warning' }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 Chart 仓库「${row.name}」吗?历史上传记录不受影响。`,
+      '提示',
+      { type: 'warning' }
+    )
+  } catch {
+    return // 用户点了取消
+  }
   await chartRepoAPI.remove(row.id)
   ElMessage.success('已删除')
   await load()

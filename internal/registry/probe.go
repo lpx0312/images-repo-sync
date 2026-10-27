@@ -179,12 +179,18 @@ func probeBearer(ctx context.Context, client *http.Client, root, pingURL, authHe
 		return ProbeResult{OK: false, Message: fmt.Sprintf("获取 token 失败(状态码 %d)", tokenResp.StatusCode), Endpoint: tokenURL, Detail: string(tokenBody)}
 	}
 
-	// 解析 token。
+	// 解析 token。部分 registry(如 GitLab)的 token 端点只返回 access_token 字段,
+	// 两个都接受,任一非空即可。
 	var tok struct {
-		Token string `json:"token"`
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(tokenBody, &tok); err != nil || tok.Token == "" {
+	if err := json.Unmarshal(tokenBody, &tok); err != nil ||
+		(tok.Token == "" && tok.AccessToken == "") {
 		return ProbeResult{OK: false, Message: "解析 token 响应失败", Endpoint: tokenURL, Detail: string(tokenBody)}
+	}
+	if tok.Token == "" {
+		tok.Token = tok.AccessToken
 	}
 
 	// 第 3 步:带 Bearer token 再访问 /v2/。

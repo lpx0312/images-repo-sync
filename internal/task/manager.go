@@ -73,7 +73,12 @@ func Instance() *Manager {
 		}
 		// worker 数由 TASK_CONCURRENCY 控制(默认 1 串行,上限 8)。
 		// 单个任务内的镜像仍串行复制;并发只作用于不同任务之间。
-		for i := 0; i < config.AppConfig.TaskConcurrency; i++ {
+		// 下限 1:防止 config 未加载(concurrency 为 0)时静默起 0 个 worker、任务永远无人消费。
+		workers := config.AppConfig.TaskConcurrency
+		if workers < 1 {
+			workers = 1
+		}
+		for i := 0; i < workers; i++ {
 			go instance.worker()
 		}
 	})

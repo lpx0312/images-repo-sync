@@ -5,6 +5,8 @@ import (
 	"log"
 	"time"
 
+	"gorm.io/gorm"
+
 	"images-repo-sync/internal/config"
 	"images-repo-sync/internal/model"
 )
@@ -67,9 +69,24 @@ func deleteOldTasks(days int) int64 {
 	terminal := []string{model.TaskStatusSuccess, model.TaskStatusFailed, model.TaskStatusCanceled}
 	return deleteBatch(
 		func(ids []uint) int64 {
-			DB.Where("task_id IN ?", ids).Delete(&model.SyncTaskItem{})
-			res := DB.Where("id IN ?", ids).Delete(&model.SyncTask{})
-			return res.RowsAffected
+			// 两步删除包进同一事务:中途失败整体回滚,不残留孤儿明细
+			// (否则重跑批次时任务删除可能因残留数据反复失败)。
+			var n int64
+			if err := DB.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Where("task_id IN ?", ids).Delete(&model.SyncTaskItem{}).Error; err != nil {
+					return err
+				}
+				res := tx.Where("id IN ?", ids).Delete(&model.SyncTask{})
+				if res.Error != nil {
+					return res.Error
+				}
+				n = res.RowsAffected
+				return nil
+			}); err != nil {
+				log.Printf("[store] 删除历史任务及明细失败(已回滚): %v", err)
+				return 0
+			}
+			return n
 		},
 		func() ([]uint, error) {
 			var ids []uint

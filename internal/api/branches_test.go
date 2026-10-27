@@ -27,24 +27,24 @@ func TestExtractHarborErr(t *testing.T) {
 	}
 }
 
-// TestMeUserDeleted token 有效但用户已删除。
+// TestMeUserDeleted token 有效但用户已删除:中间件验签后的用户存在性检查直接拒绝(401)。
 func TestMeUserDeleted(t *testing.T) {
 	r, db, token := newAuthed(t)
 	db.Where("username = ?", "admin").Delete(&model.User{})
-	if w := do(r, token, http.MethodGet, "/api/auth/me", nil); w.Code != http.StatusNotFound {
-		t.Errorf("用户不存在应 404: %d", w.Code)
+	if w := do(r, token, http.MethodGet, "/api/auth/me", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("用户已删除应 401: %d", w.Code)
 	}
 }
 
-// TestChangePasswordUserDeleted 用户被删后改密码 404。
+// TestChangePasswordUserDeleted 用户被删后改密码:中间件拦截 401。
 func TestChangePasswordUserDeleted(t *testing.T) {
 	r, db, token := newAuthed(t)
 	db.Where("username = ?", "admin").Delete(&model.User{})
 	w := do(r, token, http.MethodPut, "/api/auth/password", map[string]any{
 		"old_password": "x", "new_password": "NewPass@123",
 	})
-	if w.Code != http.StatusNotFound {
-		t.Errorf("应 404: %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("应 401: %d", w.Code)
 	}
 }
 

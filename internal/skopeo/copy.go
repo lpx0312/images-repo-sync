@@ -28,6 +28,8 @@ type CopyOptions struct {
 }
 
 // CopyResult 描述一次 copy 的结果。StderrTail 仅在失败时填充,便于排查。
+// 注意:runWithStream 回调的是 stdout+stderr 合流后的行,故 StderrTail 实际是
+// 「stdout+stderr 合流尾部」,并非纯 stderr。
 type CopyResult struct {
 	OK         bool
 	StderrTail string

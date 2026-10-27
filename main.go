@@ -40,6 +40,7 @@ func main() {
 	task.RecoverStuckTasks()
 	// chart 上传中断记录直接置失败(临时文件可能已随重启消失)。
 	store.RecoverChartUploads()
+	api.SweepTempUploads() // 清扫上次进程遗留的 irs-chart-* 上传临时目录
 
 	// 历史数据保留清理:启动跑一次,之后每天一次。
 	retainCtx, retainCancel := context.WithCancel(context.Background())

@@ -43,7 +43,7 @@
             <el-option label="失败" value="failed" />
             <el-option label="已取消" value="canceled" />
           </el-select>
-          <el-button :icon="Refresh" @click="load">刷新</el-button>
+          <el-button :icon="Refresh" @click="() => load()">刷新</el-button>
           <el-button type="primary" :icon="Plus" @click="$router.push('/sync/new')">新建同步</el-button>
         </div>
       </div>
@@ -98,8 +98,8 @@
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next, jumper"
           background
-          @current-change="load"
-          @size-change="load"
+          @current-change="() => load()"
+          @size-change="() => load()"
         />
       </div>
     </div>
@@ -107,7 +107,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { Files, Loading, CircleCheck, CircleClose, Refresh, Plus } from '@element-plus/icons-vue'
 import { taskAPI } from '@/api'
 import dayjs from 'dayjs'
@@ -119,25 +119,49 @@ const page = ref(1)
 const size = ref(20)
 const filterStatus = ref('')
 
-const stats = computed(() => {
-  const s = { total: total.value, running: 0, success: 0, failed: 0 }
-  for (const t of list.value) {
-    if (t.status === 'running' || t.status === 'pending') s.running++
-    else if (t.status === 'success') s.success++
-    else if (t.status === 'failed' || t.status === 'canceled') s.failed++
-  }
-  return s
+// 统计卡片取全量口径(按状态聚合各 total),不复用当前页数据——
+// 当前页只有 20 条,翻页后按页内统计会系统性偏小。
+const stats = ref({ total: 0, running: 0, success: 0, failed: 0 })
+
+// 状态筛选变更:回到第 1 页并重新加载(修复"筛选后须手点刷新才生效")。
+watch(filterStatus, () => {
+  page.value = 1
+  load()
 })
 
-async function load() {
-  loading.value = true
+async function loadStats() {
+  const statuses = ['running', 'pending', 'success', 'failed', 'canceled']
+  try {
+    const res = await Promise.all(statuses.map((s) => taskAPI.list({ page: 1, size: 1, status: s })))
+    const [running, pending, success, failed, canceled] = res.map((r) => r.total || 0)
+    stats.value = {
+      total: running + pending + success + failed + canceled,
+      running: running + pending,
+      success,
+      failed: failed + canceled
+    }
+  } catch {
+    // 统计失败不打断列表展示,保留上次数值。
+  }
+}
+
+// load 支持静默轮询:不置 loading(避免表格周期性闪烁),并用序号丢弃过期响应。
+let loadSeq = 0
+async function load(silent) {
+  if (silent && loading.value) return // 手动加载进行中,跳过本轮轮询
+  const seq = ++loadSeq
+  if (!silent) loading.value = true
   try {
     const res = await taskAPI.list({ page: page.value, size: size.value, status: filterStatus.value || undefined })
+    if (seq !== loadSeq) return // 已有更新的请求,丢弃过期响应
     // 拦截器返回后端响应体 { data: [...], total, page, size };业务数据在 data 字段。
     list.value = res.data || []
     total.value = res.total || 0
+    // 统计仅在用户可见的加载(首载/翻页/手动刷新)时刷新,
+    // 4s 静默轮询不刷,避免每次列表刷新放大成 5 个额外请求。
+    if (!silent) loadStats()
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -147,7 +171,7 @@ onMounted(() => {
   // 有进行中任务时自动刷新。
   timer = setInterval(() => {
     if (list.value.some((t) => t.status === 'running' || t.status === 'pending')) {
-      load()
+      load(true)
     }
   }, 4000)
 })

@@ -29,11 +29,14 @@ func ParseSource(raw string) (host, path string) {
 		return "", ""
 	}
 
-	// 去除可能的 docker:// 或 http(s):// 前缀
+	// 去除可能的 docker:// 或 http(s):// 前缀(大小写不敏感)
 	// (http:// 前缀用于标识明文 HTTP registry,host 部分保留 scheme 后的内容)。
-	raw = strings.TrimPrefix(raw, "docker://")
-	raw = strings.TrimPrefix(raw, "https://")
-	raw = strings.TrimPrefix(raw, "http://")
+	for _, p := range []string{"docker://", "https://", "http://"} {
+		if len(raw) >= len(p) && strings.EqualFold(raw[:len(p)], p) {
+			raw = raw[len(p):]
+			break
+		}
+	}
 
 	// 判断第一段是否是 host:第一个 '/' 之前的部分,若含 '.' 或 ':'(端口)或为 localhost 则视为 host。
 	// 若整体不含 '/',说明没有 host 部分(形如 nginx:1.25),host 缺省为 docker.io。
@@ -54,9 +57,14 @@ func ParseSource(raw string) (host, path string) {
 		}
 	}
 
-	// docker.io 的官方镜像放在 library/ 下;补齐。
-	if (host == "docker.io" || host == "index.docker.com") && !strings.Contains(path, "/") {
-		path = "library/" + path
+	// Docker Hub 官方域名(大小写不敏感):docker.io 及其别名(index.docker.com /
+	// registry-1.docker.io)统一归一化为 docker.io。
+	if isDockerHubHost(host) {
+		host = "docker.io"
+		// 官方镜像放在 library/ 下;补齐。
+		if !strings.Contains(path, "/") {
+			path = "library/" + path
+		}
 	}
 
 	// 补默认 tag。
@@ -72,6 +80,14 @@ func isHost(s string) bool {
 		return true
 	}
 	return strings.Contains(s, ".") || strings.Contains(s, ":")
+}
+
+// isDockerHubHost 判断 host 是否 Docker Hub 官方域名(大小写不敏感)。
+// index.docker.com 与 registry-1.docker.io 是 docker.io 的等价别名。
+func isDockerHubHost(s string) bool {
+	return strings.EqualFold(s, "docker.io") ||
+		strings.EqualFold(s, "index.docker.com") ||
+		strings.EqualFold(s, "registry-1.docker.io")
 }
 
 // StripScheme 剥掉 host 配置中的 http(s):// 前缀(大小写不敏感),返回裸 host。
@@ -111,6 +127,10 @@ func ResolveTarget(srcRef, targetHost, mode, project string) (string, error) {
 	// 目标 host 允许带 http(s):// 前缀(标识明文 HTTP registry);引用本身不能带 scheme,
 	// skopeo 对 --dest-tls-verify=false 的 HTTP registry 会自动回退。
 	targetHost = StripScheme(targetHost)
+	if targetHost == "" {
+		// 空/纯空白/纯斜杠的 host 不能拼引用,否则会得到 "/ns/img" 这类非法目标。
+		return "", fmt.Errorf("目标仓库地址不能为空")
+	}
 	project = strings.TrimSpace(project)
 
 	switch mode {

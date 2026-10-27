@@ -71,6 +71,10 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 			Updates(map[string]any{"status": itemStatus, "finished_at": now, "error": retErr.Error()}).Error; err != nil {
 			log.Printf("[task] 兜底标记剩余 item 为 %s 失败(任务 %d): %v", itemStatus, taskID, err)
 		}
+		// 预执行失败(probe/凭证/authfile)时明细已全部置终态,这里按明细实际状态
+		// 回填任务计数(与 RecoverStuckTasks 的 refreshTaskCounts 对齐),
+		// 避免「任务 failed 但 Failed=0」的计数与明细不一致。
+		refreshTaskCounts(taskID)
 		if err := db.Table("sync_tasks").Where("id = ?", taskID).Updates(map[string]any{
 			"status":      status,
 			"error":       retErr.Error(),
@@ -86,6 +90,7 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 	// 1. 加载任务及明细。先检查是否已被取消(用户可能在 worker 取到前点取消)。
 	var items []syncTaskItemWithRefs
 	var taskInfo taskLoader
+	skipNotPending := false // 乐观锁判定:任务已非 pending(终态/已取消),应跳过执行
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table("sync_tasks").Where("id = ?", taskID).First(&taskInfo).Error; err != nil {
 			return err
@@ -101,16 +106,31 @@ func (m *Manager) runTask(taskID uint) (retErr error) {
 			return err
 		}
 		now := time.Now()
-		return tx.Table("sync_tasks").Where("id = ?", taskID).Updates(map[string]any{
+		// 乐观锁:置 running 的 UPDATE 仅对 pending 生效。
+		// RowsAffected==0 说明任务已非 pending(终态或已被取消),不执行任何 item,
+		// 防止 success/failed 等终态任务被重复投递时重跑。
+		res := tx.Table("sync_tasks").Where("id = ? AND status = ?", taskID, model.TaskStatusPending).Updates(map[string]any{
 			"status":     model.TaskStatusRunning,
 			"started_at": now,
 			"total":      len(items),
-		}).Error
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			skipNotPending = true
+			return nil
+		}
+		return nil
 	}); err != nil {
 		if err == errAlreadyCanceled {
 			return nil // 已取消,不算错误
 		}
 		return err
+	}
+	if skipNotPending {
+		log.Printf("[task] 任务 %d 当前状态为 %s(非 pending),跳过执行", taskID, taskInfo.Status)
+		return nil // 返回 nil,不触发兜底,避免改写终态任务的既有数据
 	}
 
 	// 2. 解析每条明细实际生效的源/目标仓库 ID(0 回退任务级,旧数据兼容)。

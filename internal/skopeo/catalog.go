@@ -15,10 +15,11 @@ func ListTags(ctx context.Context, repo, host, user, pass string, insecure bool)
 	}
 	defer CleanupAuthFiles(authPath)
 
-	args := []string{"list-tags", "--authfile", authPath, "docker://" + repo}
+	args := []string{"list-tags"}
 	if insecure {
-		args = []string{"list-tags", "--tls-verify=false", "--authfile", authPath, "docker://" + repo}
+		args = append(args, "--tls-verify=false")
 	}
+	args = append(args, "--authfile", authPath, "docker://"+repo)
 
 	// skopeo list-tags 输出 JSON: {"Repository":"...","Tags":["..."]}
 	// 输出是多行缩进格式,须收集完整 stdout 再解析;stderr 不混入。

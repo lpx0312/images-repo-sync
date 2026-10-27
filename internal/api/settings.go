@@ -72,7 +72,10 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 	}
 
 	for k, v := range updates {
-		h.DB.Save(&model.SystemSetting{Key: k, Value: v})
+		if err := h.DB.Save(&model.SystemSetting{Key: k, Value: v}).Error; err != nil {
+			serverErr(c, "保存设置失败")
+			return
+		}
 	}
 	ok(c, gin.H{"message": "设置已保存"})
 }

@@ -95,7 +95,12 @@ func cmdTasksList(a *App, args []string) error {
 			FmtTime(t.CreatedAt),
 		})
 	}
-	a.Printf("共 %d 个任务(第 %d/%d 页):\n", env.Total, env.Page, (env.Total+int64(env.Size)-1)/int64(env.Size))
+	// 服务端异常返回 size=0 时跳过页数计算,避免除零。
+	pages := "N/A"
+	if env.Size > 0 {
+		pages = fmt.Sprint((env.Total + int64(env.Size) - 1) / int64(env.Size))
+	}
+	a.Printf("共 %d 个任务(第 %d/%s 页):\n", env.Total, env.Page, pages)
 	PrintTable(a.Out(), []string{"ID", "状态", "模式", "架构", "进度", "成功", "失败", "跳过", "创建时间"}, rows)
 	return nil
 }
@@ -146,7 +151,23 @@ func cmdTasksGet(a *App, args []string) error {
 	return nil
 }
 
-// collectRefs 汇总 --refs(逗号分隔可多次)、--refs-file 与位置参数。
+// refsValue 可累积的 --refs 参数值:多次出现 --refs 时逐次追加(而非静默覆盖),
+// String 以逗号连接,与 collectRefs 的逗号分隔解析兼容。
+type refsValue []string
+
+func (v *refsValue) String() string {
+	if v == nil {
+		return ""
+	}
+	return strings.Join(*v, ",")
+}
+
+func (v *refsValue) Set(s string) error {
+	*v = append(*v, s)
+	return nil
+}
+
+// collectRefs 汇总 --refs(可多次,值内逗号分隔)、--refs-file 与位置参数。
 func collectRefs(fs *flag.FlagSet, positional []string) ([]string, error) {
 	var refs []string
 	addAll := func(items []string) {
@@ -155,6 +176,13 @@ func collectRefs(fs *flag.FlagSet, positional []string) ([]string, error) {
 			if r != "" {
 				refs = append(refs, r)
 			}
+		}
+	}
+	// flag 解析在首个位置参数处停止,其后以 "-" 开头的参数会混进位置参数;
+	// 镜像引用不会以 "-" 开头,据此拦截误写的 flag(如 "nginx:1" 后漏写的 "--wait")。
+	for _, p := range positional {
+		if strings.HasPrefix(p, "-") {
+			return nil, fmt.Errorf("参数 %q 不是有效的镜像引用(疑似误写的 flag)", p)
 		}
 	}
 	if got := fs.Lookup("refs"); got != nil {
@@ -179,9 +207,10 @@ func cmdTasksCreate(a *App, args []string) error {
 	source := fs.Uint("source", 0, "源仓库 ID(irs registries list 查看)")
 	target := fs.Uint("target", 0, "目标仓库 ID")
 	mode := fs.String("mode", "", "同步模式: flat / preserve_path / replace_host")
-	project := fs.String("project", "", "目标 project(默认取目标仓库配置)")
+	project := fs.String("project", "", "目标 project(非 replace_host 模式必填,服务端强校验;无默认值)")
 	arch := fs.String("arch", "", "架构: amd64 / arm64 / all(默认 amd64)")
-	fs.String("refs", "", "镜像列表,逗号分隔")
+	var refsFlag refsValue
+	fs.Var(&refsFlag, "refs", "镜像列表,逗号分隔,可多次提供")
 	fs.String("refs-file", "", "镜像列表文件,每行一条,# 注释")
 	wait := fs.Bool("wait", false, "创建后跟随日志直到任务结束(失败时退出码 1)")
 	if err := fs.Parse(args); err != nil {
@@ -306,7 +335,8 @@ func followTask(a *App, c *Client, id uint) error {
 	watchCtx, watchCancel := context.WithTimeout(sctx, 6*time.Hour)
 	defer watchCancel()
 
-	failed := 0
+	failed := 0         // 本会话收到的 item_failed 计数(即时失败提示用)
+	finishedFailed := 0 // task_finished 携带的服务端最终失败数(迟到订阅者只靠它感知)
 	sawFinished := false
 	err := c.StreamSSE(watchCtx, fmt.Sprintf("/api/tasks/%d/stream", id), func(ev SSEEvent) bool {
 		// SSE 载荷是服务端 Event 信封:{type, task_id, source_ref, target_ref, message, data:{...}}。
@@ -345,10 +375,6 @@ func followTask(a *App, c *Client, id uint) error {
 			a.Printf("[失败] %s -> %s  %s\n", env.SourceRef, env.TargetRef, msg)
 		case "task_finished":
 			sawFinished = true
-			if a.JSONOut {
-				a.Printf("%s\n", ev.Data)
-				break
-			}
 			var e struct {
 				Status    string `json:"status"`
 				Succeeded int    `json:"succeeded"`
@@ -356,6 +382,11 @@ func followTask(a *App, c *Client, id uint) error {
 				Skipped   int    `json:"skipped"`
 			}
 			_ = json.Unmarshal(env.Data, &e)
+			finishedFailed = e.Failed
+			if a.JSONOut {
+				a.Printf("%s\n", ev.Data)
+				break
+			}
 			a.Printf("任务结束: 状态 %s,成功 %d,失败 %d,跳过 %d\n", e.Status, e.Succeeded, e.Failed, e.Skipped)
 		}
 		return true
@@ -365,6 +396,11 @@ func followTask(a *App, c *Client, id uint) error {
 	}
 	if !sawFinished {
 		return fmt.Errorf("事件流已断开但未收到任务结束事件(任务可能仍在执行,可用 irs tasks get %d 查看)", id)
+	}
+	// 退出判定以 task_finished 携带的服务端最终统计为准:
+	// 迟到订阅者可能错过部分 item_failed 事件,只看本会话计数会漏判失败。
+	if finishedFailed > failed {
+		failed = finishedFailed
 	}
 	if failed > 0 {
 		return fmt.Errorf("任务有 %d 个镜像同步失败,详情: irs tasks get %d", failed, id)

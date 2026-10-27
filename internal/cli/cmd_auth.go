@@ -142,12 +142,16 @@ func cmdHealth(a *App, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("参数错误")
 	}
-	c, err := a.confirmClient()
-	if err != nil {
-		return err
-	}
+	// 先解析子命令参数:显式 --server 时直接使用(health 为公开接口,无需登录态),
+	// 不走 confirmClient 的"未配置"拦截。
+	var c *Client
 	if *server != "" {
 		c = NewClient(*server, "")
+	} else {
+		var err error
+		if c, err = a.confirmClient(); err != nil {
+			return err
+		}
 	}
 	cCtx, cancel := ctx()
 	defer cancel()
@@ -227,8 +231,10 @@ func readRefsFile(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取 --refs-file 失败: %w", err)
 	}
+	// 剥离 UTF-8 BOM(Windows 记事本保存的文件常带)。
+	text := strings.TrimPrefix(string(data), "\ufeff")
 	var refs []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

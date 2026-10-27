@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,6 +20,9 @@ import (
 	"images-repo-sync/internal/registry"
 	"images-repo-sync/internal/skopeo"
 )
+
+// listTagsTimeout 限制单次 list-tags 调用(skopeo 子进程)的时长。
+const listTagsTimeout = 30 * time.Second
 
 // CatalogHandler 提供浏览仓库 repo/tag 的能力,供「新建同步」浏览目录使用。
 type CatalogHandler struct {
@@ -107,7 +112,10 @@ func (h *CatalogHandler) Tags(c *gin.Context) {
 		return
 	}
 
-	tags, err := skopeo.ListTags(c.Request.Context(), listRef, m.Host, m.Username, pass, m.Insecure)
+	// skopeo 是子进程调用,套超时防止慢仓库拖死 HTTP 连接。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), listTagsTimeout)
+	defer cancel()
+	tags, err := skopeo.ListTags(ctx, listRef, m.Host, m.Username, pass, m.Insecure)
 	if err != nil {
 		ok(c, gin.H{"ok": false, "message": err.Error(), "tags": []string{}})
 		return
@@ -117,8 +125,9 @@ func (h *CatalogHandler) Tags(c *gin.Context) {
 
 // buildListRef 把用户/浏览目录传入的 repo 名规范化为「host/path」的 list-tags 引用:
 // 去掉 docker:// 前缀与 tag,若名字带仓库 host 前缀则去掉,最后统一拼上配置仓库的 host。
+// host 统一剥掉 http(s):// 前缀(配置可能带 scheme 标识明文 HTTP,引用本身不能带)。
 func buildListRef(regHost, repo string) (string, error) {
-	regHost = strings.Trim(strings.TrimSpace(regHost), "/")
+	regHost = skopeo.StripScheme(regHost)
 	if regHost == "" {
 		return "", fmt.Errorf("仓库地址无效")
 	}
@@ -176,10 +185,16 @@ func (h *CatalogHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.GET("/:id/projects", h.Projects)
 }
 
-// registryURL 拼出完整的 HTTPS URL。registry 一律走 HTTPS;
+// registryURL 拼出完整的仓库 API URL。
+// host 带 http:// 前缀时走明文 HTTP(纯 HTTP 私有 registry 场景,与 registry/probe.go 一致);
+// 其余(无前缀或 https://)剥掉前缀后一律走 HTTPS;
 // 跳过证书校验(自签证书)在 doRequest 里通过共享的 insecure client 实现。
 func registryURL(host, path string) string {
-	return fmt.Sprintf("https://%s%s", host, path)
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(strings.ToLower(host), "http://") {
+		return strings.Trim(host, "/") + path
+	}
+	return "https://" + skopeo.StripScheme(host) + path
 }
 
 // doRequest 发请求,返回响应体。insecure 为 true 时使用跳过 TLS 校验的共享 client。

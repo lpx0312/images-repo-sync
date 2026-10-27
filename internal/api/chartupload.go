@@ -24,9 +24,15 @@ import (
 // 单次上传的数量与体积上限,防止误操作把服务打满。
 const (
 	maxChartFilesPerUpload = 100
-	maxChartFileSize       = 1 << 30 // 1GB
 	pushTimeout            = 10 * time.Minute
 )
+
+// maxChartFileSize 单个 chart 文件的大小上限(1GB)。
+// 声明为 var 便于测试临时调小构造超限场景。
+var maxChartFileSize int64 = 1 << 30
+
+// chartFileSizeLimitMsg 超限提示文案(按 1GB 标称值展示)。
+const chartFileSizeLimitMsg = "文件超过 1GB 上限"
 
 // ChartUploadHandler 处理 chart 包上传(浏览器文件 / 服务器路径)与上传记录查询。
 type ChartUploadHandler struct {
@@ -59,6 +65,8 @@ func (h *ChartUploadHandler) UploadFiles(c *gin.Context) {
 		badReq(c, "读取上传表单失败: "+err.Error())
 		return
 	}
+	// multipart 解析落盘的临时文件(multipart-*)只有 RemoveAll 会清理,必须显式调。
+	defer form.RemoveAll()
 	repoID, _ := strconv.ParseUint(c.PostForm("repo_id"), 10, 64)
 	files := form.File["files"]
 	if repoID == 0 || len(files) == 0 {
@@ -84,7 +92,7 @@ func (h *ChartUploadHandler) UploadFiles(c *gin.Context) {
 	var invalid []invalidFile
 	for _, fh := range files {
 		if fh.Size > maxChartFileSize {
-			invalid = append(invalid, invalidFile{fh.Filename, "文件超过 1GB 上限"})
+			invalid = append(invalid, invalidFile{fh.Filename, chartFileSizeLimitMsg})
 			continue
 		}
 		// 文件名只留 base,防止伪造路径穿越临时目录。
@@ -176,6 +184,11 @@ func (h *ChartUploadHandler) UploadPaths(c *gin.Context) {
 			invalid = append(invalid, invalidFile{p, "不是 .tgz 文件"})
 			continue
 		}
+		// 先按文件大小拦截,避免 ParseFile 把超大文件整个读进内存。
+		if st, err := os.Stat(p); err == nil && st.Size() > maxChartFileSize {
+			invalid = append(invalid, invalidFile{p, chartFileSizeLimitMsg})
+			continue
+		}
 		meta, size, err := chart.ParseFile(p)
 		if err != nil {
 			invalid = append(invalid, invalidFile{p, err.Error()})
@@ -229,7 +242,10 @@ func (h *ChartUploadHandler) List(c *gin.Context) {
 		q = q.Where("status = ?", status)
 	}
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		serverErr(c, "查询上传记录失败")
+		return
+	}
 	var list []model.ChartUpload
 	if err := q.Offset((page - 1) * size).Limit(size).Find(&list).Error; err != nil {
 		serverErr(c, "查询上传记录失败")
@@ -327,6 +343,11 @@ func (h *ChartUploadHandler) runOne(id uint) {
 	db.Model(&model.ChartUpload{}).Where("id = ?", id).
 		Updates(map[string]any{"status": model.TaskStatusRunning, "error": ""})
 
+	// 读取前先校验大小,防止超限文件被整个读进内存。
+	if st, err := os.Stat(u.FilePath); err == nil && st.Size() > maxChartFileSize {
+		h.finish(id, model.TaskStatusFailed, "", chartFileSizeLimitMsg)
+		return
+	}
 	data, err := os.ReadFile(u.FilePath)
 	if err != nil {
 		h.finish(id, model.TaskStatusFailed, "", "读取文件失败(服务器路径不存在或临时文件已清理): "+err.Error())
@@ -387,6 +408,27 @@ func uploadVO(u *model.ChartUpload) gin.H {
 // okWith 与 helpers.ok 相同;独立命名避免与函数内的 ok 布尔变量冲突。
 func okWith(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+// SweepTempUploads 清扫系统临时目录中遗留的 chart 上传临时目录(irs-chart-* 前缀)。
+// 上传中断/进程崩溃时这些目录不会被 runUploads 清理,启动时统一扫掉,防止临时盘被占满。
+func SweepTempUploads() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	var removed int
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "irs-chart-") {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(os.TempDir(), e.Name())) == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		fmt.Printf("[chart] 启动清扫: 已删除 %d 个遗留的上传临时目录\n", removed)
+	}
 }
 
 // RegisterRoutes 注册受保护的 chart 上传路由。

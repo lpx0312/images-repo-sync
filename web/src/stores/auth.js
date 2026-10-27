@@ -52,18 +52,6 @@ export const useAuthStore = defineStore('auth', () => {
     stopAutoLogoutTimer()
   }
 
-  async function fetchCurrentUser() {
-    if (!token.value) return
-    try {
-      const res = await authAPI.me()
-      user.value = res.data ?? res
-      const storage = localStorage.getItem('token') ? localStorage : sessionStorage
-      storage.setItem('user', JSON.stringify(user.value))
-    } catch {
-      clearAuth()
-    }
-  }
-
   async function changePassword(oldPassword, newPassword) {
     await authAPI.changePassword({ old_password: oldPassword, new_password: newPassword })
     clearAuth()
@@ -103,7 +91,6 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     clearAuth,
-    fetchCurrentUser,
     changePassword,
     updateActivityTime,
     startAutoLogoutTimer,

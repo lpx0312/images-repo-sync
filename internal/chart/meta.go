@@ -35,6 +35,10 @@ const maxChartYAML = 1 << 20
 // tagRe 是 OCI tag 的合法字符集(chart version 作为 tag 推送,需先校验)。
 var tagRe = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
 
+// nameRe 是 helm 风格的 chart name 约束:小写字母数字开头结尾,中间可含 . _ -。
+// 拒绝 /、..、空格、大写等 —— name 会拼进 OCI 仓库路径,不校验会造成路径注入。
+var nameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
+
 // ParseFile 读取磁盘上的 chart tgz 并解析元数据,返回元数据与文件大小。
 func ParseFile(path string) (*Meta, int64, error) {
 	st, err := os.Stat(path)
@@ -77,9 +81,14 @@ func ParseBytes(data []byte) (*Meta, error) {
 		if name != "Chart.yaml" && !isTopLevelChartYAML(name) {
 			continue
 		}
-		raw, err := io.ReadAll(io.LimitReader(tr, maxChartYAML))
+		// 读 limit+1 字节:读满说明超过上限,直接报明确错误;
+		// 若被 LimitReader 静默截断,YAML 会被截成残片而误报「解析失败」。
+		raw, err := io.ReadAll(io.LimitReader(tr, maxChartYAML+1))
 		if err != nil {
 			return nil, fmt.Errorf("读取 Chart.yaml 失败: %w", err)
+		}
+		if len(raw) > maxChartYAML {
+			return nil, fmt.Errorf("Chart.yaml 过大:超过 %d 字节上限", maxChartYAML)
 		}
 		return parseMeta(raw)
 	}
@@ -100,6 +109,9 @@ func parseMeta(raw []byte) (*Meta, error) {
 	m.Version = strings.TrimSpace(m.Version)
 	if m.Name == "" || m.Version == "" {
 		return nil, fmt.Errorf("Chart.yaml 缺少 name 或 version 字段")
+	}
+	if !nameRe.MatchString(m.Name) {
+		return nil, fmt.Errorf("chart name %q 不合法(须小写字母数字开头结尾,中间仅可含 . _ -)", m.Name)
 	}
 	if !tagRe.MatchString(m.Version) {
 		return nil, fmt.Errorf("chart version %q 不是合法的 tag(仅允许字母数字与 . _ -)", m.Version)

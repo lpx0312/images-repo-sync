@@ -1,13 +1,17 @@
 // 镜像引用解析工具 —— 与后端 internal/skopeo/ref.go 的 ParseSource/ResolveTarget 逻辑保持一致。
 // 用于前端 ModePreview 与 SyncNewView 共享,避免三份重复实现漂移。
+// 约定:scheme 剥离与官方域名匹配均大小写不敏感(与后端 EqualFold 行为对齐)。
 
 import { MODE_FLAT, MODE_PRESERVE_PATH, MODE_REPLACE_HOST } from './constants'
+
+// Docker Hub 的官方域名均归一化为 docker.io(与后端 ref.go 一致)。
+const OFFICIAL_HOSTS = ['docker.io', 'index.docker.com', 'registry-1.docker.io']
 
 /**
  * 判断一段是否是 registry host:含 '.' 或 ':'(端口),或为 localhost。
  */
 function isHost(s) {
-  if (s === 'localhost') return true
+  if (s.toLowerCase() === 'localhost') return true
   return s.includes('.') || s.includes(':')
 }
 
@@ -24,11 +28,13 @@ function tagPart(path) {
  * 处理隐式 docker.io 与 library 前缀,补默认 tag。
  *   "nginx:1.25" -> ["docker.io", "library/nginx:1.25"]
  *   "gcr.io/a/b/c:v1" -> ["gcr.io", "a/b/c:v1"]
+ *   "http://reg:5000/ns/img:v1" -> ["reg:5000", "ns/img:v1"]
  */
 export function parseSource(raw) {
   raw = (raw || '').trim()
   if (!raw) return ['', '']
-  raw = raw.replace(/^docker:\/\//, '')
+  // 先剥 docker:// 与 http(s):// 前缀(大小写不敏感,与后端一致)。
+  raw = raw.replace(/^docker:\/\//i, '').replace(/^https?:\/\//i, '')
   const slash = raw.indexOf('/')
   let host, path
   if (slash < 0) {
@@ -45,8 +51,12 @@ export function parseSource(raw) {
       path = raw
     }
   }
-  if ((host === 'docker.io' || host === 'index.docker.com') && !path.includes('/')) {
-    path = 'library/' + path
+  // 官方域名归一化为 docker.io(大小写不敏感)。
+  if (OFFICIAL_HOSTS.includes(host.toLowerCase())) {
+    host = 'docker.io'
+    if (!path.includes('/')) {
+      path = 'library/' + path
+    }
   }
   if (path && !tagPart(path).includes(':')) path += ':latest'
   return [host, path]
@@ -57,11 +67,16 @@ export function parseSource(raw) {
  *   MODE_FLAT:         targetHost/project/<镜像名:tag>
  *   MODE_PRESERVE_PATH: targetHost/project/<源 host 后完整路径>
  *   MODE_REPLACE_HOST:  targetHost/<源 host 后完整路径>
+ * targetHost 为空或仅空白/斜杠时返回 ''(与后端 ResolveTarget 的空 host 校验一致)。
  */
 export function resolveTarget(srcRef, targetHost, mode, project) {
   const [, srcPath] = parseSource(srcRef)
   if (!srcPath) return ''
-  targetHost = (targetHost || '').trim().replace(/\/+$/, '')
+  targetHost = (targetHost || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+  if (!targetHost) return ''
   project = (project || '').trim()
   if (mode === MODE_FLAT) {
     return project ? `${targetHost}/${project}/${tagPart(srcPath)}` : ''

@@ -94,19 +94,22 @@ func parseGlobals(args []string) (*App, []string, error) {
 		switch {
 		case a == "--json" || a == "-j":
 			app.JSONOut = true
-		case strings.HasPrefix(a, "--server"):
+		case a == "--help" || a == "-h":
+			// 输出全局 usage(走 Run 里 rest[0]=="help" 的既有路径)。
+			rest = append(rest, "help")
+		case a == "--server" || strings.HasPrefix(a, "--server="):
 			v, err := takeValue("--server")
 			if err != nil {
 				return nil, nil, err
 			}
 			app.Server = v
-		case strings.HasPrefix(a, "--token"):
+		case a == "--token" || strings.HasPrefix(a, "--token="):
 			v, err := takeValue("--token")
 			if err != nil {
 				return nil, nil, err
 			}
 			app.Token = v
-		case strings.HasPrefix(a, "--config"):
+		case a == "--config" || strings.HasPrefix(a, "--config="):
 			v, err := takeValue("--config")
 			if err != nil {
 				return nil, nil, err

@@ -102,7 +102,7 @@
             <el-option label="成功" value="success" />
             <el-option label="失败" value="failed" />
           </el-select>
-          <el-button :icon="Refresh" @click="loadRecords">刷新</el-button>
+          <el-button :icon="Refresh" @click="() => loadRecords()">刷新</el-button>
         </div>
       </div>
 
@@ -173,8 +173,8 @@
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next, jumper"
           background
-          @current-change="loadRecords"
-          @size-change="loadRecords"
+          @current-change="() => loadRecords()"
+          @size-change="() => loadRecords()"
         />
       </div>
     </div>
@@ -274,18 +274,23 @@ const page = ref(1)
 const size = ref(20)
 const filterStatus = ref('')
 
-async function loadRecords() {
-  recordsLoading.value = true
+// loadRecords 支持静默轮询:不置 loading(避免表格周期性闪烁),序号丢弃过期响应。
+let loadRecordsSeq = 0
+async function loadRecords(silent) {
+  if (silent && recordsLoading.value) return // 手动加载进行中,跳过本轮轮询
+  const seq = ++loadRecordsSeq
+  if (!silent) recordsLoading.value = true
   try {
     const res = await chartUploadAPI.list({
       page: page.value,
       size: size.value,
       status: filterStatus.value || undefined,
     })
+    if (seq !== loadRecordsSeq) return // 已有更新的请求,丢弃过期响应
     records.value = res.data || []
     total.value = res.total || 0
   } finally {
-    recordsLoading.value = false
+    if (seq === loadRecordsSeq) recordsLoading.value = false
   }
 }
 
@@ -307,7 +312,7 @@ onMounted(() => {
   loadRecords()
   timer = setInterval(() => {
     if (records.value.some((r) => r.status === 'running' || r.status === 'pending')) {
-      loadRecords()
+      loadRecords(true)
     }
   }, 3000)
 })
