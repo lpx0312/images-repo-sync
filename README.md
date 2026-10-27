@@ -56,10 +56,13 @@ cp .env.example .env  # 编辑其中的密钥
 docker compose up -d --build
 ```
 
+> compose 构建默认走内网源(`ZONE=cn`);公网环境请在 `.env` 中加一行 `ZONE=global` 再 build。
+
 ### 方式三：docker run
 
 ```bash
-docker build -t images-repo-sync .
+# 内网环境加 --build-arg ZONE=cn 走内网 Nexus 加速;公网/CI 直接 docker build 即可(默认公共源)
+docker build --build-arg ZONE=cn -t images-repo-sync .
 docker run -d --name irs \
   -p 8080:8080 \
   -v "$PWD/data:/data" \
@@ -183,7 +186,7 @@ irs charts uploads --status failed               # 上传记录;任意命令可�
 - **镜像搬运**：skopeo（按任务架构选择 `--override-arch` 或 `copy --all`；默认加 `--preserve-digests`，目标为华为云 SWR 时不加）
 - **打包**：多阶段 Dockerfile（node 构建前端 → go 编译 → alpine 运行），单二进制（前端 `go:embed`）
 
-> 构建环境默认使用内网加速：Go 代理 `http://192.168.0.12/repository/go-group/`、npm 镜像 `http://192.168.0.12/repository/npm-group/`，基础镜像来自阿里云镜像仓库。公网或 CI 可通过 `--build-arg GOPROXY=...`、`--build-arg NPM_REGISTRY=...` 覆盖，无需改 Dockerfile；更换基础镜像仍需修改 `FROM`。
+> 构建源由 `ZONE` 参数切换:默认 `global`(registry.npmjs.org / proxy.golang.org / dl-cdn.alpinelinux.org 等公共源,任何环境含 GitHub Actions 可直接构建);内网机器请加 `--build-arg ZONE=cn`(走内网 Nexus `http://192.168.0.12` 的 npm/go 代理与基础镜像内置 apk 源;`make build` 已默认 `ZONE=cn`)。也可用 `--build-arg NPM_REGISTRY=... / GOPROXY=... / GOSUMDB=...` 单独覆盖(对 global 模式生效)。
 
 ## 多架构构建
 
@@ -297,7 +300,7 @@ images-repo-sync/
 - **Harbor `_catalog`**：很多 Harbor 部署禁用了 registry 原生 `_catalog`；本工具对 Harbor 类型走 v2 API（`/api/v2.0/projects/.../repositories`），通用 Registry 走 `_catalog`；ACR / 华为云 SWR / Docker Hub 无法可靠列出目录，「浏览目录」仅对前两者开放，其余类型请用「粘贴列表」。若浏览目录失败，也请改用「粘贴列表」方式。
 - **华为云 SWR**：基础版拒收顶层 OCI image index。目标类型选「华为云 SWR」时同步不加 `--preserve-digests`，skopeo 会把 OCI index 转成 Docker manifest list（仅顶层 digest 变化，镜像内容不变）。其他类型若遇到同样拒收，会自动去掉该参数重试一次。
 - **insecure 仓库**：自签证书的仓库请在仓库配置中开启「跳过 TLS」（只跳过证书校验，仍走 HTTPS）。
-- **并发**：当前任务串行执行（SQLite 写串行 + 同步 IO 密集），避免对目标仓库造成过大压力。
+- **并发**：`TASK_CONCURRENCY` 控制任务 worker 数(默认 1 串行,范围 1-8)。多 worker 时不同任务可并行执行,单任务内的明细仍逐条串行推送(SQLite 写串行 + 同步 IO 密集),避免对目标仓库造成过大压力。
 
 ## License
 
